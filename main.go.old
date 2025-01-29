@@ -1,0 +1,232 @@
+package main
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/g3n/engine/app"
+	"github.com/g3n/engine/camera"
+	"github.com/g3n/engine/core"
+	"github.com/g3n/engine/geometry"
+	"github.com/g3n/engine/gls"
+	"github.com/g3n/engine/graphic"
+	"github.com/g3n/engine/gui"
+	"github.com/g3n/engine/light"
+	"github.com/g3n/engine/material"
+	"github.com/g3n/engine/math32"
+	"github.com/g3n/engine/renderer"
+	"github.com/g3n/engine/util"
+	"github.com/g3n/engine/util/helper"
+	"github.com/g3n/engine/window"
+)
+
+type Viz struct {
+	a      *app.Application
+	width  int
+	height int
+
+	scene     *core.Node
+	gfx_scene *core.Node
+	panel     *gui.Panel
+	gfx_panel *gui.Panel
+	dock      *gui.DockLayout
+
+	cam          *camera.Camera
+	ambientLight *light.Ambient
+	haxis        *helper.Axes
+	hgrid        *helper.Grid
+
+	vdisk_g *geometry.Geometry
+	vcube_g *geometry.Geometry
+	mat1    *material.Standard
+	mat2    *material.Standard
+	vdisk   *graphic.Mesh
+	vcube   *graphic.Mesh
+
+	trail_m *material.Standard
+	trail_s []*graphic.Sprite
+
+	fpsLabel   *gui.Label
+	frameRater *util.FrameRater
+	t          time.Duration
+}
+
+type Veichle struct {
+	Position    math32.Vector3
+	Orientation math32.Quaternion
+}
+
+func (v *Viz) Start() {
+	// Setup application and 3D scene
+	v.a = app.App()
+
+	v.scene = core.NewNode()
+	v.gfx_scene = core.NewNode()
+	v.scene.Add(v.gfx_scene)
+
+	// Set scene to be managed by GUI manager
+	// gui.Manager().Set(v.scene)
+
+	/* App GUI setup */
+	v.width, v.height = v.a.GetSize()
+	v.panel = gui.NewPanel(float32(v.width), float32(v.height))
+	v.panel.SetRenderable(true)
+	v.panel.SetEnabled(true)
+	v.panel.SetLayoutParams(&gui.DockLayoutParams{Edge: gui.DockTop})
+	v.scene.Add(v.panel)
+	// gui.Manager().Set(v.panel)
+
+	v.dock = gui.NewDockLayout()
+	v.panel.SetLayout(v.dock)
+
+	top1 := gui.NewPanel(float32(v.width), float32(v.height)*0.2)
+	top1.SetBorders(1, 1, 1, 1)
+	top1.SetPaddings(2, 2, 2, 2)
+	top1.SetColor(math32.NewColor("green"))
+	top1.SetLayoutParams(&gui.DockLayoutParams{Edge: gui.DockBottom})
+	v.panel.Add(top1)
+
+	srm := gui.NewVScroller(float32(v.width)-20, 12*6)
+	srm.SetColor(&math32.Color{R: 1, G: 1, B: 1})
+	srm.Add(gui.NewLabel("test"))
+	srm.Add(gui.NewLabel("test2"))
+	top1.Add(srm)
+
+	/* 3D Scene setup */
+
+	// Camera
+	v.cam = camera.New(1.0)
+	v.cam.SetPosition(0, 2, 3)
+	v.cam.LookAt(&math32.Vector3{X: 0, Y: 0, Z: 0}, &math32.Vector3{X: 0, Y: 1, Z: 0})
+	v.gfx_scene.Add(v.cam)
+	camera.NewOrbitControl(v.cam)
+
+	// Set up callback to update viewport and camera aspect ratio when the window is resized
+	onResize := func(evname string, ev interface{}) {
+		// Get framebuffer size and update viewport accordingly
+		width, height := v.a.GetSize()
+		v.width = width
+		v.height = height
+		v.a.Gls().Viewport(0, 0, int32(width), int32(height))
+		// Update the camera's aspect ratio
+		v.cam.SetAspect(float32(width) / float32(height))
+	}
+	v.a.Subscribe(window.OnWindowSize, onResize)
+	onResize("", nil)
+
+	// Ambient light
+	v.ambientLight = light.NewAmbient(&math32.Color{R: 1.0, G: 1.0, B: 1.0}, 0.8)
+	v.gfx_scene.Add(v.ambientLight)
+
+	// Helper axis
+	v.haxis = helper.NewAxes(1)
+	v.gfx_scene.Add(v.haxis)
+
+	// Helper grid
+	v.hgrid = helper.NewGrid(20, 1, &math32.Color{R: 0.5, G: 0.5, B: 0.5})
+	v.gfx_scene.Add(v.hgrid)
+
+	// Set background color to almost black
+	v.a.Gls().ClearColor(0.05, 0.05, 0.05, 1.0)
+
+	// Create a disk geometry
+	v.vdisk_g = geometry.NewDisk(1, 3)
+	v.mat1 = material.NewStandard(&math32.Color{R: 1, G: 0, B: 1})
+	v.mat1.SetWireframe(true)
+	v.mat1.SetLineWidth(2)
+	v.vdisk = graphic.NewMesh(v.vdisk_g, v.mat1)
+	v.vdisk.SetRotation(-math32.Pi/2, 0, 0)
+	v.gfx_scene.Add(v.vdisk)
+
+	// Create a cube geometry
+	v.vcube_g = geometry.NewCube(1)
+	v.mat2 = material.NewStandard(&math32.Color{R: 1, G: 1, B: 0})
+	v.mat2.SetWireframe(true)
+	v.mat2.SetLineWidth(2)
+	v.vcube = graphic.NewMesh(v.vcube_g, v.mat2)
+	v.vcube.SetScale(0.5, 0.5, 0.5)
+	v.vcube.SetPosition(0, 0, 0.25)
+	v.vdisk.Add(v.vcube)
+
+	// Create a trail sprites
+	v.trail_m = material.NewStandard(&math32.Color{R: 0, G: 1, B: 1})
+	v.trail_m.SetTransparent(true)
+	v.trail_m.SetOpacity(0.5)
+	// v.trail_m.SetEmissiveColor(&math32.Color{R: 0, G: 1, B: 1})
+	v.trail_s = make([]*graphic.Sprite, 100)
+	for i := 0; i < 100; i++ {
+		v.trail_s[i] = graphic.NewSprite(0.2, 0.1, v.trail_m)
+		v.trail_s[i].SetPosition(0, 0, 0)
+		v.gfx_scene.Add(v.trail_s[i])
+	}
+
+	// Create a label to show the FPS (frames per second)
+	v.frameRater = util.NewFrameRater(60)
+	v.fpsLabel = gui.NewLabel("FPS: 0")
+	v.fpsLabel.SetColor(&math32.Color{R: 1, G: 1, B: 1})
+	v.gfx_scene.Add(v.fpsLabel)
+
+	/* Application loop */
+
+	// Run the application main loop
+	v.a.Run(func(renderer *renderer.Renderer, deltaTime time.Duration) {
+		// Start measuring the time it takes to render the frame
+		v.frameRater.Start()
+		// Clear the screen
+		v.a.Gls().Clear(gls.DEPTH_BUFFER_BIT | gls.STENCIL_BUFFER_BIT | gls.COLOR_BUFFER_BIT)
+		// Update the scene
+		v.Update(deltaTime)
+		// Render the scene
+		renderer.Render(v.scene, v.cam)
+		// Update the FPS label
+		v.frameRater.Wait()
+		updateFPS(v.frameRater, v.fpsLabel)
+	})
+
+}
+
+func updateFPS(frameRater *util.FrameRater, fpsLabel *gui.Label) {
+	// Get the FPS and potential FPS from the frameRater
+	fps, _, ok := frameRater.FPS(time.Duration(1000) * time.Millisecond)
+	if !ok {
+		return
+	}
+
+	// Show the FPS in the header label
+	fpsLabel.SetText(fmt.Sprintf("FPS: %3.1f", fps))
+}
+
+func (v *Viz) Update(deltaTime time.Duration) {
+	// Rotate the disk
+	v.vdisk.RotateZ(0.01)
+	// Move the disk along a circular path
+	v.t += deltaTime
+	timeElapsed := float64(v.t.Seconds())
+	radius := 2.0
+	speed := 2.0
+	angle := speed * timeElapsed
+
+	x := float32(radius) * math32.Cos(float32(angle))
+	z := float32(radius) * math32.Sin(float32(angle))
+	v.vdisk.SetPosition(
+		x,
+		0,
+		z,
+	)
+
+	// Update the trail sprites
+	for i := len(v.trail_s) - 1; i > 0; i-- {
+		pos := v.trail_s[i-1].Position()
+		v.trail_s[i].SetPositionVec(&pos)
+		rot := v.trail_s[i-1].Rotation()
+		v.trail_s[i].SetRotationVec(&rot)
+	}
+	v.trail_s[0].SetPosition(x, 0, z)
+	v.trail_s[0].RotateZ(0.01)
+
+}
+
+func main() {
+	v := Viz{}
+	v.Start()
+}
