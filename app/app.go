@@ -162,30 +162,56 @@ func (a *App) buildGUI() {
 	gui.Manager().Set(a.mainPanel)
 
 	// Serial Monitor Footer
-	footer := gui.NewPanel(float32(width), float32(height)*0.2)
+	footer := gui.NewPanel(float32(width)-float32(width)*0.3-10, float32(height)*0.2)
 	footer.SetBorders(1, 0, 0, 0)
 	footer.SetPaddings(2, 2, 2, 2)
-	footer.SetColor4(&math32.Color4{R: 0.25, G: 0.25, B: 0.25, A: 0.75})
+	footer.SetColor4(&math32.Color4{R: 0.25, G: 0.25, B: 0.25, A: 1.0})
 	footer.SetLayoutParams(&gui.DockLayoutParams{Edge: gui.DockBottom})
+	footer_vb := gui.NewVBoxLayout()
+	footer.SetLayout(footer_vb)
 	a.mainPanel.Add(footer)
 
-	srm := gui.NewVScroller(float32(width), float32(height)*0.2)
+	srm_l := gui.NewLabel("Serial Monitor:")
+	footer.Add(srm_l)
+	srm := gui.NewVScroller(float32(width)-float32(width)*0.3-10, float32(height)*0.2-srm_l.Height()-2)
 	a.mainPanel.SubscribeID(gui.OnResize, a, func(evname string, ev interface{}) {
 		width, height := a.GetSize()
-		srm.SetSize(float32(width), float32(height)*0.2)
+		srm.SetSize(float32(width)-float32(width)*0.3-10, float32(height)*0.2-srm_l.Height()-2)
 	})
-	// srm.SetColor(&math32.Color{R: 1, G: 1, B: 1})
+	srm.SetColor(&math32.Color{R: 0, G: 0, B: 0})
+	srm.SetPaddings(0, 5, 0, 5)
+	srm.SetPaddings(0, 5, 0, 5)
 	for i := 1; i <= 100; i++ {
-		srm.Add(gui.NewLabel(fmt.Sprintf("label%d", i)))
+		label := gui.NewLabel(fmt.Sprintf("label%d", i))
+		label.SetPaddings(0, 2, 0, 2)
+		srm.Add(label)
 	}
-	srm.ScrollDown()
+	// go func() {
+	// 	ticker := time.NewTicker(100 * time.Millisecond)
+	// 	defer ticker.Stop()
+	// 	i := 0
+	// 	for range ticker.C {
+	// 		srm.Add(gui.NewLabel(fmt.Sprintf("label%d", i)))
+	// 		srm.SetColor(&math32.Color{R: 0, G: 0, B: 0})
+	// 		srm.ScrollDown()
+	// 		i++
+	// 	}
+	// }()
+	srm.Subscribe(gui.OnCursorEnter, func(evname string, ev interface{}) {
+		srm.SetColor(&math32.Color{R: 0, G: 0, B: 0})
+		srm.ScrollDown()
+	})
+	srm.Subscribe(gui.OnCursorLeave, func(evname string, ev interface{}) {
+		srm.SetColor(&math32.Color{R: 0, G: 0, B: 0})
+		srm.ScrollDown()
+	})
 	footer.Add(srm)
 
 	// Graph & Table sidebar
 	sidebar := gui.NewPanel(float32(width)*0.3, float32(height))
 	sidebar.SetBorders(0, 0, 0, 1)
 	sidebar.SetPaddings(2, 2, 2, 2)
-	sidebar.SetColor4(&math32.Color4{R: 0.25, G: 0.25, B: 0.25, A: 0.75})
+	sidebar.SetColor4(&math32.Color4{R: 0.25, G: 0.25, B: 0.25, A: 1.0})
 	sidebar.SetLayoutParams(&gui.DockLayoutParams{Edge: gui.DockRight})
 	a.mainPanel.Add(sidebar)
 
@@ -196,41 +222,67 @@ func (a *App) buildGUI() {
 	sidebar_v.SetAlignV(gui.AlignTop)
 	sidebar.SetLayout(sidebar_v)
 
+	// Serial port selector
+	serial_hb := gui.NewHBoxLayout()
+	serial_hb.SetAlignH(gui.AlignLeft)
+	serial_hb.SetAutoWidth(false)
+	serial_hb.SetSpacing(5)
+	serial_p := gui.NewPanel(sidebar.Width(), 18)
+	serial_p.SetLayout(serial_hb)
+	sidebar.Add(serial_p)
+	serial_l := gui.NewLabel("Serial Port: ")
+	serial_p.Add(serial_l)
+	serial_dd := gui.NewDropDown(serial_p.Width(), gui.NewImageLabel("/dev/..."))
+	serial_p.Add(serial_dd)
+	serial_btn := gui.NewButton("Connect")
+	serial_btn.SetHeight(serial_dd.Height())
+	serial_dd.SetWidth(serial_p.Width() - serial_l.Width() - serial_btn.Width() - 18)
+	serial_p.Add(serial_btn)
+	serial_p.SetHeight(serial_dd.Height())
+
 	// Trail slider
-	trail_l := gui.NewLabel("Trail length: ")
-	sidebar.Add(trail_l)
-	trail_s := gui.NewHSlider(sidebar.Width(), trail_l.Height())
+	trail_hb := gui.NewHBoxLayout()
+	trail_hb.SetAlignH(gui.AlignLeft)
+	trail_hb.SetAutoWidth(false)
+	trail_hb.SetSpacing(5)
+	trail_p := gui.NewPanel(sidebar.Width(), 16)
+	trail_p.SetLayout(trail_hb)
+	sidebar.Add(trail_p)
+	trail_l := gui.NewLabel("Trail Length: ")
+	trail_p.Add(trail_l)
+	trail_s := gui.NewHSlider(sidebar.Width()-trail_l.Width()-15, trail_l.Height())
 	trail_s.SetValue(1)
 	trail_s.SetText(fmt.Sprintf("%d frames", int(trail_s.Value()*100)))
 	trail_s.Subscribe(gui.OnChange, func(evname string, ev interface{}) {
 		// process change
 		trail_s.SetText(fmt.Sprintf("%d frames", int(trail_s.Value()*100)))
 	})
-	sidebar.Add(trail_s)
+	trail_p.Add(trail_s)
+	trail_p.SetHeight(trail_s.Height())
 
 	// Graphs
 	graphs_tb_l := gui.NewLabel("Sensor Data: ")
 	sidebar.Add(graphs_tb_l)
-	graphs_tb := gui.NewTabBar(sidebar.Width()-4, graphs_tb_l.Height()*10)
+	graphs_tb := gui.NewTabBar(sidebar.Width()-4, graphs_tb_l.Height()*12)
 	graphs_tb.SetPaddings(0, 2, 0, 2)
 	graphs_tb.SetMargins(0, 2, 0, 2)
 	sidebar.Add(graphs_tb)
 	a.mainPanel.SubscribeID(gui.OnResize, a, func(evname string, ev interface{}) {
-		graphs_tb.SetSize(sidebar.Width()-4, graphs_tb_l.Height()*10)
+		graphs_tb.SetSize(sidebar.Width()-4, graphs_tb_l.Height()*12)
 	})
 
 	// accel graph
 	graphs_accel_tab := graphs_tb.AddTab("Linear Accel.")
 	graphs_accel_tab.SetPinned(true)
 
-	graph_imu_accel := gui.NewChart(sidebar.Width()-16, graphs_tb_l.Height()*10)
+	graph_imu_accel := gui.NewChart(sidebar.Width()-16, graphs_tb_l.Height()*12)
 	graph_imu_accel.SetMargins(0, 2, 0, 2)
 	graph_imu_accel.SetBorders(2, 2, 2, 2)
 	graph_imu_accel.SetBordersColor(math32.NewColor("black"))
 	graph_imu_accel.SetPaddings(0, 2, 0, 2)
 	graph_imu_accel.SetColor(math32.NewColor("white"))
-	graph_imu_accel.SetRangeY(-2, 2)
-	graph_imu_accel.SetScaleY(10, &math32.Color{R: 0.8, G: 0.8, B: 0.8})
+	graph_imu_accel.SetRangeY(-2, 2) //todo: set this from device config
+	graph_imu_accel.SetScaleY(11, &math32.Color{R: 0.8, G: 0.8, B: 0.8})
 	graph_imu_accel.SetFontSizeX(12)
 	graph_imu_accel.SetFormatY("%2.1f")
 	graphs_accel_tab.SetContent(graph_imu_accel)
@@ -239,14 +291,14 @@ func (a *App) buildGUI() {
 	graphs_orio_tab := graphs_tb.AddTab("Orientation")
 	graphs_orio_tab.SetPinned(true)
 
-	graph_imu_orio := gui.NewChart(sidebar.Width()-16, graphs_tb_l.Height()*10)
+	graph_imu_orio := gui.NewChart(sidebar.Width()-16, graphs_tb_l.Height()*12)
 	graph_imu_orio.SetMargins(0, 2, 0, 2)
 	graph_imu_orio.SetBorders(2, 2, 2, 2)
 	graph_imu_orio.SetBordersColor(math32.NewColor("black"))
 	graph_imu_orio.SetPaddings(0, 2, 0, 2)
 	graph_imu_orio.SetColor(math32.NewColor("white"))
 	graph_imu_orio.SetRangeY(-180, 180)
-	graph_imu_orio.SetScaleY(10, &math32.Color{R: 0.8, G: 0.8, B: 0.8})
+	graph_imu_orio.SetScaleY(9, &math32.Color{R: 0.8, G: 0.8, B: 0.8})
 	graph_imu_orio.SetFontSizeX(12)
 	graph_imu_orio.SetFormatY("%2.1f")
 	graphs_orio_tab.SetContent(graph_imu_orio)
@@ -255,28 +307,84 @@ func (a *App) buildGUI() {
 	graphs_of_tab := graphs_tb.AddTab("Optical Flow")
 	graphs_of_tab.SetPinned(true)
 
+	graph_of_delta := gui.NewChart(sidebar.Width()-16, graphs_tb_l.Height()*12)
+	graph_of_delta.SetMargins(0, 2, 0, 2)
+	graph_of_delta.SetBorders(2, 2, 2, 2)
+	graph_of_delta.SetBordersColor(math32.NewColor("black"))
+	graph_of_delta.SetPaddings(0, 2, 0, 2)
+	graph_of_delta.SetColor(math32.NewColor("white"))
+	graph_of_delta.SetRangeY(-50, 50)
+	graph_of_delta.SetScaleY(11, &math32.Color{R: 0.8, G: 0.8, B: 0.8})
+	graph_of_delta.SetFontSizeX(12)
+	graph_of_delta.SetFormatY("%2.f")
+	graph_of_delta.SetRangeYauto(true)
+	graphs_of_tab.SetContent(graph_of_delta)
+
 	// Kalman parameters viewer
 	//todo: dont use tabs but show everything at once? nested panels?
 
 	kalman_tb_l := gui.NewLabel("Kalman Parameters:")
 	sidebar.Add(kalman_tb_l)
-	kalman_tb := gui.NewTabBar(sidebar.Width()-4, kalman_tb_l.Height()*10)
-	kalman_tb.SetPaddings(0, 2, 0, 2)
-	kalman_tb.SetMargins(0, 2, 0, 2)
-	sidebar.Add(kalman_tb)
-	a.mainPanel.SubscribeID(gui.OnResize, a, func(evname string, ev interface{}) {
-		kalman_tb.SetSize(sidebar.Width()-4, kalman_tb_l.Height()*10)
+	/*
+		kalman_tb := gui.NewTabBar(sidebar.Width()-4, kalman_tb_l.Height()*10)
+		kalman_tb.SetPaddings(0, 2, 0, 2)
+		kalman_tb.SetMargins(0, 2, 0, 2)
+		sidebar.Add(kalman_tb)
+		a.mainPanel.SubscribeID(gui.OnResize, a, func(evname string, ev interface{}) {
+			kalman_tb.SetSize(sidebar.Width()-4, kalman_tb_l.Height()*10)
+		})
+
+		// State
+		kalman_state_tab := kalman_tb.AddTab("State (x)")
+		kalman_state_tab.SetPinned(true)
+
+		kalman_pc_tab := kalman_tb.AddTab("Process Covariance (Q)")
+		kalman_pc_tab.SetPinned(true)
+
+		kalman_oc_tab := kalman_tb.AddTab("Observation Covariance (R)")
+		kalman_oc_tab.SetPinned(true)
+	*/
+
+	sidebar_r_height := a.mainPanel.Height() - kalman_tb_l.Position().Y
+	kalman_p_s := gui.NewHSplitter(sidebar.Width()-16, sidebar_r_height)
+	kalman_p_s.SetSplit(0.5)
+	kalman_p_s.P0.SetBorders(0, 1, 0, 0)
+	kalman_p_s.SetColor(math32.NewColor("green"))
+	sidebar.Add(kalman_p_s)
+
+	kalman_p_t1 := gui.NewTree(kalman_p_s.P0.ContentWidth(), sidebar_r_height)
+	kalman_p_s.P0.Add(kalman_p_t1)
+	k_state_n := kalman_p_t1.AddNode("State (x)")
+	k_state_tb, err := gui.NewTable(kalman_p_s.P0.ContentWidth(), 32*6, []gui.TableColumn{
+		{Id: "1", Header: "x", Width: 48, Minwidth: 32, Align: gui.AlignLeft, Format: "%3.3f", Expand: 0, Resize: false},
+		{Id: "2", Header: "param", Width: 48, Minwidth: 32, Align: gui.AlignLeft, Format: "%s", Expand: 1, Resize: false},
 	})
+	if err != nil {
+		panic(err)
+	}
+	state_params :=
+		map[int]string{
+			0: "Position X",
+			1: "Position Y",
+			2: "Position Z",
+			3: "Velocity X",
+			4: "Velocity Y",
+			5: "Velocity Z",
+		}
+	state_vals := make([]map[string]interface{}, 0, 6)
+	for i := 0; i < 6; i++ {
+		rval := make(map[string]interface{})
+		rval["1"] = float32(i * 2)
+		rval["2"] = state_params[i]
+		state_vals = append(state_vals, rval)
+	}
+	k_state_tb.SetRows(state_vals)
+	k_state_n.Add(k_state_tb)
+	k_state_n.SetExpanded(true)
 
-	// State
-	kalman_state_tab := kalman_tb.AddTab("State (x)")
-	kalman_state_tab.SetPinned(true)
+	// k_pc_n := kalman_p.AddNode("Proccess Covariance (Q)")
 
-	kalman_pc_tab := kalman_tb.AddTab("Process Covariance (Q)")
-	kalman_pc_tab.SetPinned(true)
-
-	kalman_oc_tab := kalman_tb.AddTab("Observation Covariance (R)")
-	kalman_oc_tab.SetPinned(true)
+	// k_oc_n := kalman_p.AddNode("Observation Covariance (R)")
 
 	//
 
@@ -320,11 +428,11 @@ func (a *App) Update(rend *renderer.Renderer, deltaTime time.Duration) {
 }
 
 func (a *App) updateFPS() {
-	fps, ffps, ok := a.frameRater.FPS(time.Duration(targetFPS) * time.Millisecond)
+	fps, _, ok := a.frameRater.FPS(time.Duration(targetFPS) * time.Millisecond)
 	if !ok {
 		return
 	}
-	a.labelFPS.SetText(fmt.Sprintf("Render FPS: %3.1f\nMax FPS: %4.f", fps, ffps))
+	a.labelFPS.SetText(fmt.Sprintf("Render FPS: %3.1f", fps))
 }
 
 func (a *App) updateViz(deltaTime time.Duration) {
