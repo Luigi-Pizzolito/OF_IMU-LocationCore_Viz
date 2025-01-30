@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"math/rand/v2"
 	"time"
 
 	"github.com/g3n/engine/app"
@@ -68,8 +69,11 @@ func Create() *App {
 	width, height := a.GetSize()
 	aspect := float32(width) / float32(height)
 	a.camera = camera.New(aspect)
-	a.camera.SetPosition(0, 2, 3)
-	a.camera.LookAt(&math32.Vector3{X: 0, Y: 0, Z: 0}, &math32.Vector3{X: 0, Y: 1, Z: 0})
+	// a.camera.SetPosition(5.557, 3.657, 1.824)
+	a.camera.SetPositionVec(&math32.Vector3{X: 5.5, Y: 3.0, Z: 1.5})
+	a.camera.LookAt(&math32.Vector3{X: 0, Y: 0, Z: 0}, &math32.Vector3{X: 0, Y: 1.0, Z: 0})
+	// a.camera.SetRotationVec(&math32.Vector3{X: -0.644, Y: 0.531, Z: 0.365})
+	// a.camera.SetProjection(camera.Orthographic)
 	a.scene.Add(a.camera)
 	a.orbit = camera.NewOrbitControl(a.camera)
 
@@ -78,6 +82,20 @@ func Create() *App {
 
 	// Build user interface
 	a.buildGUI()
+
+	// Create perspective selector
+	pers := gui.NewCheckBox("Orthographic")
+	pers.SetValue(false)
+	pers.SetEnabled(true)
+	pers.Subscribe(gui.OnChange, func(evname string, ev interface{}) {
+		if pers.Value() {
+			a.camera.SetProjection(camera.Orthographic)
+		} else {
+			a.camera.SetProjection(camera.Perspective)
+		}
+	})
+	a.mainPanel.Add(pers)
+	pers.SetPosition(0, 16)
 
 	// window resize handler
 	a.Subscribe(window.OnWindowSize, func(evname string, ev interface{}) {
@@ -181,11 +199,12 @@ func (a *App) buildGUI() {
 	srm.SetColor(&math32.Color{R: 0, G: 0, B: 0})
 	srm.SetPaddings(0, 5, 0, 5)
 	srm.SetPaddings(0, 5, 0, 5)
-	for i := 1; i <= 100; i++ {
-		label := gui.NewLabel(fmt.Sprintf("label%d", i))
-		label.SetPaddings(0, 2, 0, 2)
-		srm.Add(label)
-	}
+	// for i := 1; i <= 100; i++ {
+	// 	label := gui.NewLabel(fmt.Sprintf("label%d", i))
+	// 	label.SetPaddings(0, 2, 0, 2)
+	// 	srm.Add(label)
+	// }
+	srm.Add(gui.NewLabel("Waiting for serial connection..."))
 	// go func() {
 	// 	ticker := time.NewTicker(100 * time.Millisecond)
 	// 	defer ticker.Stop()
@@ -200,6 +219,8 @@ func (a *App) buildGUI() {
 	srm.Subscribe(gui.OnCursorEnter, func(evname string, ev interface{}) {
 		srm.SetColor(&math32.Color{R: 0, G: 0, B: 0})
 		srm.ScrollDown()
+		// fmt.Printf("Camera position: %v\n", a.camera.Position())
+		// fmt.Printf("Camera angle: %v\n", a.camera.Rotation())
 	})
 	srm.Subscribe(gui.OnCursorLeave, func(evname string, ev interface{}) {
 		srm.SetColor(&math32.Color{R: 0, G: 0, B: 0})
@@ -325,34 +346,21 @@ func (a *App) buildGUI() {
 
 	kalman_tb_l := gui.NewLabel("Kalman Parameters:")
 	sidebar.Add(kalman_tb_l)
-	/*
-		kalman_tb := gui.NewTabBar(sidebar.Width()-4, kalman_tb_l.Height()*10)
-		kalman_tb.SetPaddings(0, 2, 0, 2)
-		kalman_tb.SetMargins(0, 2, 0, 2)
-		sidebar.Add(kalman_tb)
-		a.mainPanel.SubscribeID(gui.OnResize, a, func(evname string, ev interface{}) {
-			kalman_tb.SetSize(sidebar.Width()-4, kalman_tb_l.Height()*10)
-		})
 
-		// State
-		kalman_state_tab := kalman_tb.AddTab("State (x)")
-		kalman_state_tab.SetPinned(true)
-
-		kalman_pc_tab := kalman_tb.AddTab("Process Covariance (Q)")
-		kalman_pc_tab.SetPinned(true)
-
-		kalman_oc_tab := kalman_tb.AddTab("Observation Covariance (R)")
-		kalman_oc_tab.SetPinned(true)
-	*/
-
+	// Sidebar and First column
 	sidebar_r_height := a.mainPanel.Height() - kalman_tb_l.Position().Y
-	kalman_p_s := gui.NewHSplitter(sidebar.Width()-16, sidebar_r_height)
-	kalman_p_s.SetSplit(0.5)
+	kalman_p_s := gui.NewHSplitter(sidebar.Width()-16, sidebar_r_height*0.6)
+	kalman_p_s.SetSplit(0.4)
 	kalman_p_s.P0.SetBorders(0, 1, 0, 0)
-	kalman_p_s.SetColor(math32.NewColor("green"))
-	sidebar.Add(kalman_p_s)
 
-	kalman_p_t1 := gui.NewTree(kalman_p_s.P0.ContentWidth(), sidebar_r_height)
+	kalman_p_s2 := gui.NewVSplitter(sidebar.Width()-16, sidebar_r_height)
+	kalman_p_s2.SetSplit(0.6)
+	sidebar.Add(kalman_p_s2)
+	kalman_p_s2.P0.Add(kalman_p_s)
+	// sidebar.Add(kalman_p_s)
+
+	// Kalman State
+	kalman_p_t1 := gui.NewTree(kalman_p_s.P0.ContentWidth(), sidebar_r_height*0.6)
 	kalman_p_s.P0.Add(kalman_p_t1)
 	k_state_n := kalman_p_t1.AddNode("State (x)")
 	k_state_tb, err := gui.NewTable(kalman_p_s.P0.ContentWidth(), 32*6, []gui.TableColumn{
@@ -362,6 +370,7 @@ func (a *App) buildGUI() {
 	if err != nil {
 		panic(err)
 	}
+	k_state_tb.ShowHeader(false)
 	state_params :=
 		map[int]string{
 			0: "Position X",
@@ -382,11 +391,72 @@ func (a *App) buildGUI() {
 	k_state_n.Add(k_state_tb)
 	k_state_n.SetExpanded(true)
 
-	// k_pc_n := kalman_p.AddNode("Proccess Covariance (Q)")
+	// Second Column
+	kalman_p_t2 := gui.NewTree(kalman_p_s.P1.ContentWidth(), sidebar_r_height*0.6)
+	kalman_p_s.P1.Add(kalman_p_t2)
 
-	// k_oc_n := kalman_p.AddNode("Observation Covariance (R)")
+	// Kalman Proccess Covariance
+	k_pc_n := kalman_p_t2.AddNode("Proccess Covariance (Q)")
+	k_pc_tb, err := gui.NewTable(kalman_p_s.P1.ContentWidth(), 24*3, []gui.TableColumn{
+		{Id: "1", Width: 48, Minwidth: 32, Align: gui.AlignLeft, Format: "%3.3f", Expand: 0, Resize: false},
+		{Id: "2", Width: 48, Minwidth: 32, Align: gui.AlignLeft, Format: "%3.3f", Expand: 0, Resize: false},
+		{Id: "3", Width: 48, Minwidth: 32, Align: gui.AlignLeft, Format: "%3.3f", Expand: 0, Resize: false},
+	})
+	if err != nil {
+		panic(err)
+	}
+	k_pc_vals := make([]map[string]interface{}, 0, 3)
+	for i := 0; i < 3; i++ {
+		rval := make(map[string]interface{})
+		rval["1"] = rand.Float32()
+		rval["2"] = rand.Float32()
+		rval["3"] = rand.Float32()
+		k_pc_vals = append(k_pc_vals, rval)
+	}
+	k_pc_tb.SetRows(k_pc_vals)
+	k_pc_tb.ShowHeader(false)
+	k_pc_n.Add(k_pc_tb)
+	k_pc_n.SetExpanded(true)
 
-	//
+	// Kalman Observation Covariance
+	k_oc_n := kalman_p_t2.AddNode("Observation Covariance (R)")
+	k_oc_tb, err := gui.NewTable(kalman_p_s.P1.ContentWidth(), 24*3, []gui.TableColumn{
+		{Id: "1", Width: 48, Minwidth: 32, Align: gui.AlignLeft, Format: "%3.3f", Expand: 0, Resize: false},
+		{Id: "2", Width: 48, Minwidth: 32, Align: gui.AlignLeft, Format: "%3.3f", Expand: 0, Resize: false},
+		{Id: "3", Width: 48, Minwidth: 32, Align: gui.AlignLeft, Format: "%3.3f", Expand: 0, Resize: false},
+	})
+	if err != nil {
+		panic(err)
+	}
+	k_oc_vals := make([]map[string]interface{}, 0, 3)
+	for i := 0; i < 3; i++ {
+		rval := make(map[string]interface{})
+		rval["1"] = rand.Float32()
+		rval["2"] = rand.Float32()
+		rval["3"] = rand.Float32()
+		k_oc_vals = append(k_oc_vals, rval)
+	}
+	k_oc_tb.SetRows(k_oc_vals)
+	k_oc_tb.ShowHeader(false)
+	k_oc_n.Add(k_oc_tb)
+	k_oc_n.SetExpanded(true)
+
+	// Bottom Row fixed matrices
+	k_tabs := gui.NewTabBar(kalman_p_s2.ContentWidth(), kalman_p_s2.P1.ContentHeight())
+	k_tabs.SetPaddings(0, 2, 0, 2)
+	k_tabs.SetMargins(0, 2, 0, 2)
+	kalman_p_s2.P1.Add(k_tabs)
+	a.mainPanel.SubscribeID(gui.OnResize, a, func(evname string, ev interface{}) {
+		k_tabs.SetSize(kalman_p_s2.ContentWidth(), kalman_p_s2.P1.ContentHeight())
+	})
+
+	// State Transition Matrix (F)
+	k_tabs_st_tb := k_tabs.AddTab("State Transition Matrix (F)")
+	k_tabs_st_tb.SetPinned(true)
+
+	// Control Input Model (B)
+	k_tabs_ci_tb := k_tabs.AddTab("Control-Input Model (B)")
+	k_tabs_ci_tb.SetPinned(true)
 
 	// FPS label
 	a.labelFPS = gui.NewLabel("FPS: 000.0")
