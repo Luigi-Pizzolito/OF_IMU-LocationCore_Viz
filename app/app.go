@@ -51,6 +51,9 @@ type App struct {
 	frameRater *util.FrameRater
 	labelFPS   *gui.Label
 	t          time.Duration
+
+	// HAL Connector
+	con *Connector
 }
 
 func Create() *App {
@@ -61,6 +64,9 @@ func Create() *App {
 	// Log OpenGL version
 	glVersion := a.Gls().GetString(gls.VERSION)
 	fmt.Printf("OpenGL ver: %s\n", glVersion)
+
+	// HAL Connector
+	a.con = new(Connector)
 
 	// Create scenes
 	a.scene = core.NewNode()
@@ -228,6 +234,9 @@ func (a *App) buildGUI() {
 	})
 	footer.Add(srm)
 
+	//? link!
+	a.con.setScroller(srm)
+
 	// Graph & Table sidebar
 	sidebar := gui.NewPanel(float32(width)*0.3, float32(height))
 	sidebar.SetBorders(0, 0, 0, 1)
@@ -253,13 +262,29 @@ func (a *App) buildGUI() {
 	sidebar.Add(serial_p)
 	serial_l := gui.NewLabel("Serial Port: ")
 	serial_p.Add(serial_l)
-	serial_dd := gui.NewDropDown(serial_p.Width(), gui.NewImageLabel("/dev/..."))
+	serial_dd := gui.NewDropDown(serial_p.Width(), gui.NewImageLabel("Scanning..."))
 	serial_p.Add(serial_dd)
 	serial_btn := gui.NewButton("Connect")
 	serial_btn.SetHeight(serial_dd.Height())
 	serial_dd.SetWidth(serial_p.Width() - serial_l.Width() - serial_btn.Width() - 18)
 	serial_p.Add(serial_btn)
 	serial_p.SetHeight(serial_dd.Height())
+	// Refresh ports
+	go func() {
+		ports := a.con.GetPorts()
+		// serial_dd.DisposeChildren(false)
+		for _, p := range ports {
+			serial_dd.Add(gui.NewImageLabel(p))
+		}
+	}()
+	// Set port
+	serial_btn.Subscribe(gui.OnClick, func(evname string, ev interface{}) {
+		port := serial_dd.Selected()
+		if port == nil {
+			return
+		}
+		a.con.ConnectPort(port.Text())
+	})
 
 	// Trail slider
 	trail_hb := gui.NewHBoxLayout()
