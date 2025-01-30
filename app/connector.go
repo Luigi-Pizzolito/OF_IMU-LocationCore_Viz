@@ -1,7 +1,10 @@
 package app
 
 import (
+	"bufio"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/g3n/engine/gui"
@@ -14,6 +17,7 @@ type Connector struct {
 
 	// Link back to display
 	srm *gui.ItemScroller
+	rso sync.Mutex
 
 	// Kalman State
 	x math32.ArrayF32
@@ -54,28 +58,47 @@ func (c *Connector) ConnectPort(portname string) {
 		panic(err)
 	}
 
-	go c.recvRoutine(port)
-}
+	// go c.recvRoutine(port)
+	var buffer strings.Builder
+	var mu sync.Mutex
+	go func() {
+		reader := bufio.NewReader(port)
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				panic(err)
+			}
+			mu.Lock()
+			buffer.WriteString(line)
+			if strings.Contains(line, "\n") {
+				data := buffer.String()
+				c.portRecvCb(data)
+				buffer.Reset()
+			}
+			mu.Unlock()
+		}
+	}()
 
-func (c *Connector) recvRoutine(port serial.Port) {
-	buff := make([]byte, 2000)
-	for {
-		n, err := port.Read(buff)
-		if err != nil {
-			c.srm.Add(gui.NewImageLabel("Serial Error: " + err.Error()))
-			break
-		}
-		if n == 0 {
-			c.srm.Add(gui.NewImageLabel("EOF"))
-			break
-		}
-		recv := fmt.Sprintf("%v", string(buff[:n]))
-		c.srm.Add(gui.NewImageLabel(recv))
-		c.srm.ScrollDown()
-		c.portRecvCb(recv)
-	}
 }
 
 func (c *Connector) portRecvCb(recv string) {
+	if len(recv) == 0 {
+		return
+	}
+
+	var recvLabel *gui.ImageLabel
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("Recovered in portRecvCb:", r)
+		}
+	}()
+	recvLabel = gui.NewImageLabel(recv)
+
+	c.srm.Add(recvLabel)
+	if len(c.srm.Children()) > 10 {
+		c.srm.RemoveAt(0)
+	}
+	c.srm.ScrollDown()
+
 	fmt.Println("Received: " + recv)
 }
