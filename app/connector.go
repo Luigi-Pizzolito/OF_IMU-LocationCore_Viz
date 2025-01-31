@@ -2,6 +2,7 @@ package app
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -12,12 +13,24 @@ import (
 	"go.bug.st/serial"
 )
 
+func rotateOnAxis(xx, yy, zz int, a float32) *math32.Quaternion {
+	factor := math32.Sin(a / 2)
+
+	x := float32(xx) * factor
+	y := float32(yy) * factor
+	z := float32(zz) * factor
+
+	w := math32.Cos(a / 2)
+
+	return &math32.Quaternion{X: x, Y: y, Z: z, W: w}
+}
+
 type Connector struct {
 	// Serial port connection
 
 	// Link back to display
 	srm *gui.ItemScroller
-	rso sync.Mutex
+	rso bool
 
 	// Kalman State
 	x math32.ArrayF32
@@ -100,5 +113,41 @@ func (c *Connector) portRecvCb(recv string) {
 	}
 	c.srm.ScrollDown()
 
-	fmt.Println("Received: " + recv)
+	// fmt.Println("Received: " + recv)
+
+	go func() {
+		var data map[string]interface{}
+		if err := json.Unmarshal([]byte(recv), &data); err != nil {
+			fmt.Println("Error parsing JSON:", err)
+			return
+		}
+		// fmt.Println("Parsed JSON Data:", data)
+		c.rso = true
+		if data["motion"] != nil {
+			c.of_d = math32.Vector3{
+				X: c.of_d.X + float32(data["delta_x"].(float64)),
+				Z: c.of_d.Y + float32(data["delta_y"].(float64)),
+				Y: 0,
+			}
+		} else {
+			if data["quat9"] != nil {
+				quat9 := data["quat9"].(map[string]interface{})
+				c.orin = math32.Quaternion{
+					X: float32(quat9["y"].(float64)),
+					Y: float32(quat9["x"].(float64)),
+					Z: -float32(quat9["z"].(float64)),
+					W: float32(quat9["w"].(float64)),
+				}
+				// Flip Z, Rotate by 90 on X axis, Rotate by 90 on Z axis
+				rotation := rotateOnAxis(1, 0, 0, math32.Pi/2).Multiply(rotateOnAxis(0, 0, 1, math32.Pi/2))
+				c.orin = *c.orin.MultiplyQuaternions(rotation, &c.orin)
+				c.orin_e.SetFromQuaternion(&c.orin)
+				c.orin_e.MultiplyScalar(180 / math32.Pi)
+			}
+		}
+		fmt.Printf("Optical Flow Delta: %+v\n", c.of_d)
+		fmt.Printf("Orientation Quaternion: %+v\n", c.orin)
+		fmt.Printf("Orientation Euler: %+v\n", c.orin_e)
+		c.rso = false
+	}()
 }

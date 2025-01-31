@@ -186,7 +186,8 @@ func (a *App) setupScene() {
 	a.mat1.SetWireframe(true)
 	a.mat1.SetLineWidth(2)
 	a.vdisk = graphic.NewMesh(a.vdisk_g, a.mat1)
-	a.vdisk.SetRotation(-math32.Pi/2, 0, 0)
+	a.vdisk.SetCullable(false)
+	// a.vdisk.SetRotation(-math32.Pi/2, 0, 0)
 	a.scene.Add(a.vdisk)
 
 	// Create a cube geometry
@@ -562,23 +563,31 @@ func (a *App) updateFPS() {
 }
 
 func (a *App) updateViz(deltaTime time.Duration) {
-	// Rotate the disk
-	a.vdisk.RotateZ(0.01)
-	// Move the disk along a circular path
-	a.t += deltaTime
-	timeElapsed := float64(a.t.Seconds())
-	radius := 2.0
-	speed := 2.0
-	angle := speed * timeElapsed
+	/*
+		// Rotate the disk
+		a.vdisk.RotateZ(0.01)
+		// Move the disk along a circular path
+		a.t += deltaTime
+		timeElapsed := float64(a.t.Seconds())
+		radius := 2.0
+		speed := 2.0
+		angle := speed * timeElapsed
 
-	x := float32(radius) * math32.Cos(float32(angle))
-	z := float32(radius) * math32.Sin(float32(angle))
-	a.vdisk.SetPosition(
-		x,
-		0,
-		z,
-	)
+		x := float32(radius) * math32.Cos(float32(angle))
+		z := float32(radius) * math32.Sin(float32(angle))
+		a.vdisk.SetPosition(
+			x,
+			0,
+			z,
+		)
+	*/
+	if !a.con.rso {
+		a.vdisk.SetRotationQuat(&a.con.orin)
+		a.vdisk.SetPositionVec(&a.con.of_d)
+	}
 
+	// var x, z float32
+	// x, z = 0.0, 0.0
 	// Update the trail sprites
 	for i := len(a.trail_s) - 1; i > 0; i-- {
 		pos := a.trail_s[i-1].Position()
@@ -586,6 +595,7 @@ func (a *App) updateViz(deltaTime time.Duration) {
 		rot := a.trail_s[i-1].Rotation()
 		a.trail_s[i].SetRotationVec(&rot)
 	}
-	a.trail_s[0].SetPosition(x, 0, z)
-	a.trail_s[0].RotateZ(0.01)
+	// a.trail_s[0].SetPosition(x, 0, z)
+	a.trail_s[0].SetPositionVec(&a.con.of_d)
+	// a.trail_s[0].RotateZ(0.01)
 }
