@@ -58,6 +58,16 @@ type App struct {
 	graphs_of_tab    *gui.Tab
 	graph_of_delta   *gui.Chart
 
+	lacel_x *gui.Graph
+	lacel_y *gui.Graph
+	lacel_z *gui.Graph
+	orio_x  *gui.Graph
+	orio_y  *gui.Graph
+	orio_z  *gui.Graph
+	of_x    *gui.Graph
+	of_y    *gui.Graph
+	of_z    *gui.Graph
+
 	kalman_tb_l  *gui.Label
 	kalman_p_s2  *gui.Splitter
 	kalman_p_s   *gui.Splitter
@@ -258,6 +268,7 @@ func (a *App) buildGUI() {
 
 	//? link!
 	a.con.setScroller(a.srm)
+	a.con.setUpdateGraphsFunc(a.updateGraphs)
 
 	// Graph & Table sidebar
 	a.sidebar = gui.NewPanel(float32(width)*0.3, float32(height))
@@ -300,6 +311,9 @@ func (a *App) buildGUI() {
 			a.serial_dd.Add(gui.NewImageLabel(p))
 			a.srm.Add(gui.NewImageLabel("Found serial port: " + p))
 			a.serial_dd.SetSelected(a.serial_dd.ItemAt(i))
+			// Auto-Connect
+			time.Sleep(200 * time.Millisecond)
+			a.con.ConnectPort(p)
 		}
 	}()
 	// Set port
@@ -387,7 +401,7 @@ func (a *App) buildGUI() {
 	a.graph_of_delta.SetRangeY(-50, 50)
 	a.graph_of_delta.SetScaleY(11, &math32.Color{R: 0.8, G: 0.8, B: 0.8})
 	a.graph_of_delta.SetFontSizeX(12)
-	a.graph_of_delta.SetFormatY("%2.f")
+	a.graph_of_delta.SetFormatY("%2.1f")
 	a.graph_of_delta.SetRangeYauto(true)
 	a.graphs_of_tab.SetContent(a.graph_of_delta)
 
@@ -520,6 +534,79 @@ func (a *App) buildGUI() {
 	})
 }
 
+func (a *App) updateGraphs() {
+	if !a.con.rso {
+		// Linear Acceleration
+		if a.lacel_x != nil {
+			a.graph_imu_accel.RemoveGraph(a.lacel_x)
+			a.lacel_x = nil
+		}
+		if a.lacel_y != nil {
+			a.graph_imu_accel.RemoveGraph(a.lacel_y)
+			a.lacel_y = nil
+		}
+		if a.lacel_z != nil {
+			a.graph_imu_accel.RemoveGraph(a.lacel_z)
+			a.lacel_z = nil
+		}
+		var lacel_x_d, lacel_y_d, lacel_z_d []float32
+		for i := 0; i < len(a.con.lin_accel_a); i++ {
+			lacel_x_d = append(lacel_x_d, a.con.lin_accel_a[i].X)
+			lacel_y_d = append(lacel_y_d, a.con.lin_accel_a[i].Y)
+			lacel_z_d = append(lacel_z_d, a.con.lin_accel_a[i].Z)
+		}
+		a.lacel_x = a.graph_imu_accel.AddLineGraph(&math32.Color{R: 1, G: 0, B: 0}, lacel_x_d)
+		a.lacel_y = a.graph_imu_accel.AddLineGraph(&math32.Color{R: 0, G: 1, B: 0}, lacel_y_d)
+		a.lacel_z = a.graph_imu_accel.AddLineGraph(&math32.Color{R: 0, G: 0, B: 1}, lacel_z_d)
+
+		// Orientation
+		if a.orio_x != nil {
+			a.graph_imu_orio.RemoveGraph(a.orio_x)
+			a.orio_x = nil
+		}
+		if a.orio_y != nil {
+			a.graph_imu_orio.RemoveGraph(a.orio_y)
+			a.orio_y = nil
+		}
+		if a.orio_z != nil {
+			a.graph_imu_orio.RemoveGraph(a.orio_z)
+			a.orio_z = nil
+		}
+		var orio_x_d, orio_y_d, orio_z_d []float32
+		for i := 0; i < len(a.con.orin_e_a); i++ {
+			orio_x_d = append(orio_x_d, a.con.orin_e_a[i].X)
+			orio_y_d = append(orio_y_d, a.con.orin_e_a[i].Z) // swap Y and Z
+			orio_z_d = append(orio_z_d, a.con.orin_e_a[i].Y)
+		}
+		a.orio_x = a.graph_imu_orio.AddLineGraph(&math32.Color{R: 1, G: 0, B: 0}, orio_x_d)
+		a.orio_y = a.graph_imu_orio.AddLineGraph(&math32.Color{R: 0, G: 1, B: 0}, orio_y_d)
+		a.orio_z = a.graph_imu_orio.AddLineGraph(&math32.Color{R: 0, G: 0, B: 1}, orio_z_d)
+
+		// Optical Flow
+		if a.of_x != nil {
+			a.graph_of_delta.RemoveGraph(a.of_x)
+			a.of_x = nil
+		}
+		if a.of_y != nil {
+			a.graph_of_delta.RemoveGraph(a.of_y)
+			a.of_y = nil
+		}
+		if a.of_z != nil {
+			a.graph_of_delta.RemoveGraph(a.of_z)
+			a.of_z = nil
+		}
+		var of_x_d, of_y_d, of_z_d []float32
+		for i := 0; i < len(a.con.of_d_a); i++ {
+			of_x_d = append(of_x_d, a.con.of_d_a[i].X)
+			of_y_d = append(of_y_d, a.con.of_d_a[i].Y)
+			of_z_d = append(of_z_d, a.con.of_d_a[i].Z)
+		}
+		a.of_x = a.graph_of_delta.AddLineGraph(&math32.Color{R: 1, G: 0, B: 0}, of_x_d)
+		a.of_y = a.graph_of_delta.AddLineGraph(&math32.Color{R: 0, G: 1, B: 0}, of_y_d)
+		a.of_z = a.graph_of_delta.AddLineGraph(&math32.Color{R: 0, G: 0, B: 1}, of_z_d)
+	}
+}
+
 func (a *App) Run() {
 	a.Application.Run(a.Update)
 }
@@ -527,6 +614,8 @@ func (a *App) Run() {
 func (a *App) Update(rend *renderer.Renderer, deltaTime time.Duration) {
 	// Start measuring this frame
 	a.frameRater.Start()
+
+	a.updateGraphs()
 
 	// Clear the color, depth and stencil buffers
 	a.Gls().Clear(gls.DEPTH_BUFFER_BIT | gls.STENCIL_BUFFER_BIT | gls.COLOR_BUFFER_BIT)
