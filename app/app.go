@@ -22,7 +22,9 @@ import (
 )
 
 const (
-	targetFPS = 60
+	targetFPS   = 120
+	historySize = 10 * 200
+	posScale    = 500 // 5cm/sq
 )
 
 //todo: move all of the stack-initialsied members to class properties for global access
@@ -48,6 +50,7 @@ type App struct {
 	trail_p  *gui.Panel
 	trail_l  *gui.Label
 	trail_sl *gui.Slider
+	histShow int
 
 	graphs_tb_l      *gui.Label
 	graphs_tb        *gui.TabBar
@@ -102,7 +105,8 @@ type App struct {
 	t          time.Duration
 
 	// HAL Connector
-	con *Connector
+	con        *Connector
+	pos_offset math32.Vector3
 }
 
 func Create() *App {
@@ -159,6 +163,8 @@ func Create() *App {
 	a.OnWindowResize()
 
 	// key events
+	a.Subscribe(window.OnKeyDown, a.onKey)
+	a.Subscribe(window.OnKeyUp, a.onKey)
 
 	// Setup scene
 	a.setupScene()
@@ -172,6 +178,17 @@ func (a *App) OnWindowResize() {
 	a.camera.SetAspect(float32(width) / float32(height))
 
 	a.mainPanel.SetSize(float32(width), float32(height))
+}
+
+func (a *App) onKey(evname string, ev interface{}) {
+	kev := ev.(*window.KeyEvent)
+	switch kev.Key {
+	case window.KeyF5:
+		a.pos_offset = *a.con.of_d.MultiplyScalar(-1)
+		for i := range a.trail_s {
+			a.trail_s[i].SetPosition(0, 0, 0)
+		}
+	}
 }
 
 func (a *App) setupScene() {
@@ -215,8 +232,8 @@ func (a *App) setupScene() {
 	a.trail_m.SetTransparent(true)
 	a.trail_m.SetOpacity(0.5)
 	// a.trail_m.SetEmissiveColor(&math32.Color{R: 0, G: 1, B: 1})
-	a.trail_s = make([]*graphic.Sprite, 100)
-	for i := 0; i < 100; i++ {
+	a.trail_s = make([]*graphic.Sprite, historySize)
+	for i := 0; i < historySize; i++ {
 		a.trail_s[i] = graphic.NewSprite(0.2, 0.1, a.trail_m)
 		a.trail_s[i].SetPosition(0, 0, 0)
 		a.scene.Add(a.trail_s[i])
@@ -268,7 +285,7 @@ func (a *App) buildGUI() {
 
 	//? link!
 	a.con.setScroller(a.srm)
-	a.con.setUpdateGraphsFunc(a.updateGraphs)
+	a.con.setUpdateGraphsFunc(a.updateGraphs, historySize, posScale)
 
 	// Graph & Table sidebar
 	a.sidebar = gui.NewPanel(float32(width)*0.3, float32(height))
@@ -337,10 +354,12 @@ func (a *App) buildGUI() {
 	a.trail_p.Add(a.trail_l)
 	a.trail_sl = gui.NewHSlider(a.sidebar.Width()-a.trail_l.Width()-15, a.trail_l.Height())
 	a.trail_sl.SetValue(1)
-	a.trail_sl.SetText(fmt.Sprintf("%d frames", int(a.trail_sl.Value()*100)))
+	a.histShow = historySize
+	a.trail_sl.SetText(fmt.Sprintf("%d frames", int(a.trail_sl.Value()*historySize)))
 	a.trail_sl.Subscribe(gui.OnChange, func(evname string, ev interface{}) {
 		// process change
-		a.trail_sl.SetText(fmt.Sprintf("%d frames", int(a.trail_sl.Value()*100)))
+		a.histShow = int(a.trail_sl.Value() * historySize)
+		a.trail_sl.SetText(fmt.Sprintf("%d frames", a.histShow))
 	})
 	a.trail_p.Add(a.trail_sl)
 	a.trail_p.SetHeight(a.trail_sl.Height())
@@ -554,6 +573,9 @@ func (a *App) updateGraphs() {
 			lacel_x_d = append(lacel_x_d, a.con.lin_accel_a[i].X)
 			lacel_y_d = append(lacel_y_d, a.con.lin_accel_a[i].Y)
 			lacel_z_d = append(lacel_z_d, a.con.lin_accel_a[i].Z)
+			if i == a.histShow {
+				break
+			}
 		}
 		a.lacel_x = a.graph_imu_accel.AddLineGraph(&math32.Color{R: 1, G: 0, B: 0}, lacel_x_d)
 		a.lacel_y = a.graph_imu_accel.AddLineGraph(&math32.Color{R: 0, G: 1, B: 0}, lacel_y_d)
@@ -577,6 +599,9 @@ func (a *App) updateGraphs() {
 			orio_x_d = append(orio_x_d, a.con.orin_e_a[i].X)
 			orio_y_d = append(orio_y_d, a.con.orin_e_a[i].Z) // swap Y and Z
 			orio_z_d = append(orio_z_d, a.con.orin_e_a[i].Y)
+			if i == a.histShow {
+				break
+			}
 		}
 		a.orio_x = a.graph_imu_orio.AddLineGraph(&math32.Color{R: 1, G: 0, B: 0}, orio_x_d)
 		a.orio_y = a.graph_imu_orio.AddLineGraph(&math32.Color{R: 0, G: 1, B: 0}, orio_y_d)
@@ -600,10 +625,33 @@ func (a *App) updateGraphs() {
 			of_x_d = append(of_x_d, a.con.of_d_a[i].X)
 			of_y_d = append(of_y_d, a.con.of_d_a[i].Y)
 			of_z_d = append(of_z_d, a.con.of_d_a[i].Z)
+			if i == a.histShow {
+				break
+			}
 		}
 		a.of_x = a.graph_of_delta.AddLineGraph(&math32.Color{R: 1, G: 0, B: 0}, of_x_d)
 		a.of_y = a.graph_of_delta.AddLineGraph(&math32.Color{R: 0, G: 1, B: 0}, of_y_d)
 		a.of_z = a.graph_of_delta.AddLineGraph(&math32.Color{R: 0, G: 0, B: 1}, of_z_d)
+
+		// State Table
+		state_params :=
+			map[int]string{
+				0: "Position X",
+				1: "Position Y",
+				2: "Position Z",
+				3: "Velocity X",
+				4: "Velocity Y",
+				5: "Velocity Z",
+			}
+		state_vals := make([]map[string]interface{}, 0, 6)
+		for i := 0; i < 6; i++ {
+			rval := make(map[string]interface{})
+			rval["1"] = a.con.x[i]
+			rval["2"] = state_params[i]
+			state_vals = append(state_vals, rval)
+		}
+		a.k_state_tb.SetRows(state_vals)
+
 	}
 }
 
@@ -670,21 +718,32 @@ func (a *App) updateViz(deltaTime time.Duration) {
 			z,
 		)
 	*/
-	if !a.con.rso {
-		a.vdisk.SetRotationQuat(&a.con.orin)
-		a.vdisk.SetPositionVec(&a.con.of_d)
-	}
 
-	// var x, z float32
-	// x, z = 0.0, 0.0
-	// Update the trail sprites
-	for i := len(a.trail_s) - 1; i > 0; i-- {
-		pos := a.trail_s[i-1].Position()
-		a.trail_s[i].SetPositionVec(&pos)
-		rot := a.trail_s[i-1].Rotation()
-		a.trail_s[i].SetRotationVec(&rot)
+	if !a.con.rso {
+
+		currentPos := a.con.of_d.Add(&a.pos_offset)
+
+		a.vdisk.SetRotationQuat(&a.con.orin)
+		a.vdisk.SetPositionVec(currentPos)
+
+		// var x, z float32
+		// x, z = 0.0, 0.0
+		// Update the trail sprites
+		for i := len(a.trail_s) - 1; i > 0; i-- {
+			pos := a.trail_s[i-1].Position()
+			a.trail_s[i].SetPositionVec(&pos)
+			rot := a.trail_s[i-1].Rotation()
+			a.trail_s[i].SetRotationVec(&rot)
+
+			if i <= a.histShow {
+				a.trail_s[i].SetVisible(true)
+			} else {
+				a.trail_s[i].SetVisible(false)
+			}
+		}
+		// a.trail_s[0].SetPosition(x, 0, z)
+		a.trail_s[0].SetPositionVec(currentPos)
+		// a.trail_s[0].RotateZ(0.01)
+
 	}
-	// a.trail_s[0].SetPosition(x, 0, z)
-	a.trail_s[0].SetPositionVec(&a.con.of_d)
-	// a.trail_s[0].RotateZ(0.01)
 }

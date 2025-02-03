@@ -34,8 +34,7 @@ type Connector struct {
 
 	// Kalman State
 	x math32.ArrayF32
-	Q math32.ArrayF32
-	R math32.ArrayF32
+	P math32.ArrayF32
 
 	lin_accel math32.Vector3
 	orin      math32.Quaternion
@@ -45,6 +44,9 @@ type Connector struct {
 	lin_accel_a []math32.Vector3
 	orin_e_a    []math32.Vector3
 	of_d_a      []math32.Vector3
+
+	historySize int
+	posS        int
 
 	updateGraphsFunc func()
 
@@ -59,10 +61,16 @@ func (c *Connector) setScroller(scroller *gui.ItemScroller) {
 	c.srm = scroller
 }
 
-func (c *Connector) setUpdateGraphsFunc(f func()) {
-	c.lin_accel_a = make([]math32.Vector3, 100)
-	c.orin_e_a = make([]math32.Vector3, 100)
-	c.of_d_a = make([]math32.Vector3, 100)
+func (c *Connector) setUpdateGraphsFunc(f func(), hist int, pS int) {
+	c.historySize = hist
+	c.posS = pS
+	c.lin_accel_a = make([]math32.Vector3, c.historySize)
+	c.orin_e_a = make([]math32.Vector3, c.historySize)
+	c.of_d_a = make([]math32.Vector3, c.historySize)
+
+	c.x = make(math32.ArrayF32, 6)
+	c.P = make(math32.ArrayF32, 6*6)
+
 	c.updateGraphsFunc = f
 }
 
@@ -154,7 +162,7 @@ func (c *Connector) portRecvCb(recv string) {
 		c.srm.ScrollDown()
 	*/
 
-	// fmt.Println("Received: " + recv)
+	fmt.Println("Received: " + recv)
 
 	var data map[string]interface{}
 	if err := json.Unmarshal([]byte(recv), &data); err != nil {
@@ -170,24 +178,61 @@ func (c *Connector) portRecvCb(recv string) {
 			}
 			c.rso = true // lock flag
 
-			if data["motion"] != nil {
-				c.of_d = math32.Vector3{
-					X: c.of_d.X + float32(data["delta_x"].(float64)),
-					Y: c.of_d.Y + float32(data["delta_y"].(float64)),
-					Z: 0,
+			/*
+				if data["motion"] != nil {
+					c.of_d = math32.Vector3{
+						X: c.of_d.X + float32(data["delta_x"].(float64)),
+						Y: c.of_d.Y + float32(data["delta_y"].(float64)),
+						Z: 0,
+					}
+
+					//todo: map thru orien quaternion into 3D space
+					c.of_d.ApplyQuaternion(&c.orin)
+
+				} else {
+					if data["quat9"] != nil {
+						quat9 := data["quat9"].(map[string]interface{})
+						c.orin = math32.Quaternion{
+							X: float32(quat9["y"].(float64)),
+							Y: float32(quat9["x"].(float64)),
+							Z: -float32(quat9["z"].(float64)),
+							W: float32(quat9["w"].(float64)),
+						}
+						// Flip Z, Rotate by 90 on X axis, Rotate by 90 on Z axis
+						c.orin = *c.orin.MultiplyQuaternions(qRobotProjection, &c.orin)
+						// Convert to Euler
+						c.orin_e.SetFromQuaternion(&c.orin)
+						c.orin_e.MultiplyScalar(180 / math32.Pi)
+						c.orin_e.X += 90 //? not sure why this is needed
+					}
+					if data["linear_accel"] != nil {
+						lin_accel := data["linear_accel"].(map[string]interface{})
+						c.lin_accel = math32.Vector3{
+							X: float32(lin_accel["x"].(float64)),
+							Y: float32(lin_accel["y"].(float64)),
+							Z: float32(lin_accel["z"].(float64)),
+						}
+						c.lin_accel.ApplyQuaternion(qRobotProjection)
+						//! needs to be converted to global frame
+						//c.lin_accel.ApplyQuaternion(&c.orin)
+						// c.of_d.Add(&c.lin_accel) // dead reckoning
+						// Integrate acceleration to update position
+							// dt := float32(1) / 10 // assuming a fixed time step, you may need to adjust this
+							// c.lin_accel_v.Add(c.lin_accel.MultiplyScalar(dt))
+							// c.of_d.Add(c.lin_accel_v.MultiplyScalar(dt).MultiplyScalar(10))
+					}
 				}
+			*/
 
-				//todo: map thru orien quaternion into 3D space
-				c.of_d.ApplyQuaternion(&c.orin)
-
-			} else {
-				if data["quat9"] != nil {
-					quat9 := data["quat9"].(map[string]interface{})
+			if data["sensor_input"] != nil {
+				sensor_input := data["sensor_input"].(map[string]interface{})
+				if sensor_input["quat"] != nil {
+					quat := sensor_input["quat"].(map[string]interface{})
 					c.orin = math32.Quaternion{
-						X: float32(quat9["y"].(float64)),
-						Y: float32(quat9["x"].(float64)),
-						Z: -float32(quat9["z"].(float64)),
-						W: float32(quat9["w"].(float64)),
+						X: float32(quat["x"].(float64)),
+						Y: float32(quat["y"].(float64)),
+						Z: float32(quat["z"].(float64)),
+						W: float32(quat["w"].(float64)),
 					}
 					// Flip Z, Rotate by 90 on X axis, Rotate by 90 on Z axis
 					c.orin = *c.orin.MultiplyQuaternions(qRobotProjection, &c.orin)
@@ -196,48 +241,60 @@ func (c *Connector) portRecvCb(recv string) {
 					c.orin_e.MultiplyScalar(180 / math32.Pi)
 					c.orin_e.X += 90 //? not sure why this is needed
 				}
-				if data["linear_accel"] != nil {
-					lin_accel := data["linear_accel"].(map[string]interface{})
+				if sensor_input["accel"] != nil {
+					accel := sensor_input["accel"].(map[string]interface{})
 					c.lin_accel = math32.Vector3{
-						X: float32(lin_accel["x"].(float64)),
-						Y: float32(lin_accel["y"].(float64)),
-						Z: float32(lin_accel["z"].(float64)),
+						X: float32(accel["x"].(float64)),
+						Y: float32(accel["y"].(float64)),
+						Z: float32(accel["z"].(float64)),
 					}
 					c.lin_accel.ApplyQuaternion(qRobotProjection)
-					//! needs to be converted to global frame
-					//c.lin_accel.ApplyQuaternion(&c.orin)
-					// c.of_d.Add(&c.lin_accel) // dead reckoning
-					// Integrate acceleration to update position
-					dt := float32(1) / 10 // assuming a fixed time step, you may need to adjust this
-					c.lin_accel_v.Add(c.lin_accel.MultiplyScalar(dt))
-					c.of_d.Add(c.lin_accel_v.MultiplyScalar(dt).MultiplyScalar(10))
 				}
+			}
+			if data["state"] != nil {
+				state := data["state"].(map[string]interface{})
+
+				c.x[0] = float32(state["x"].(float64))
+				c.x[1] = float32(state["y"].(float64))
+				c.x[2] = float32(state["z"].(float64))
+				c.x[3] = float32(state["vx"].(float64))
+				c.x[4] = float32(state["vy"].(float64))
+				c.x[5] = float32(state["vz"].(float64))
+
+				c.of_d = math32.Vector3{
+					X: float32(state["x"].(float64)),
+					Y: -float32(state["y"].(float64)),
+					Z: -float32(state["z"].(float64)),
+				}
+				c.of_d.ApplyQuaternion(qRobotProjection)
+				c.of_d.MultiplyScalar(float32(c.posS))
+				// c.of_d.ApplyQuaternion(&c.orin)
 			}
 
 			// Ensure history buffers are initialized
 			if len(c.lin_accel_a) == 0 {
-				c.lin_accel_a = make([]math32.Vector3, 100)
+				c.lin_accel_a = make([]math32.Vector3, c.historySize)
 			}
 			if len(c.orin_e_a) == 0 {
-				c.orin_e_a = make([]math32.Vector3, 100)
+				c.orin_e_a = make([]math32.Vector3, c.historySize)
 			}
 			if len(c.of_d_a) == 0 {
-				c.of_d_a = make([]math32.Vector3, 100)
+				c.of_d_a = make([]math32.Vector3, c.historySize)
 			}
 
 			// Shift history buffers back by one
-			if len(c.lin_accel_a) > 1 {
-				copy(c.lin_accel_a[1:], c.lin_accel_a[:len(c.lin_accel_a)-1])
+			for i := len(c.lin_accel_a) - 1; i > 0; i-- {
+				c.lin_accel_a[i] = c.lin_accel_a[i-1]
 			}
 			c.lin_accel_a[0] = c.lin_accel
 
-			if len(c.orin_e_a) > 1 {
-				copy(c.orin_e_a[1:], c.orin_e_a[:len(c.orin_e_a)-1])
+			for i := len(c.orin_e_a) - 1; i > 0; i-- {
+				c.orin_e_a[i] = c.orin_e_a[i-1]
 			}
 			c.orin_e_a[0] = c.orin_e
 
-			if len(c.of_d_a) > 1 {
-				copy(c.of_d_a[1:], c.of_d_a[:len(c.of_d_a)-1])
+			for i := len(c.of_d_a) - 1; i > 0; i-- {
+				c.of_d_a[i] = c.of_d_a[i-1]
 			}
 			c.of_d_a[0] = c.of_d
 
