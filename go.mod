@@ -3,6 +3,7 @@ module OF_IMU-LocationCore-Viz
 go 1.23.4
 
 require (
+	github.com/crazy3lf/colorconv v1.2.0
 	github.com/g3n/engine v0.2.0
 	go.bug.st/serial v1.6.2
 )

@@ -2,7 +2,6 @@ package app
 
 import (
 	"fmt"
-	"math/rand/v2"
 	"time"
 
 	"github.com/g3n/engine/app"
@@ -24,10 +23,11 @@ import (
 const (
 	targetFPS   = 120
 	historySize = 10 * 200
-	posScale    = 500 // 5cm/sq
+	posScale    = 100 // m to cm
 )
 
 //todo: move all of the stack-initialsied members to class properties for global access
+//todo: colour history particles based on the velocity of the device
 
 type App struct {
 	*app.Application
@@ -71,20 +71,31 @@ type App struct {
 	of_y    *gui.Graph
 	of_z    *gui.Graph
 
-	kalman_tb_l  *gui.Label
-	kalman_p_s2  *gui.Splitter
-	kalman_p_s   *gui.Splitter
-	kalman_p_t1  *gui.Tree
-	k_state_n    *gui.TreeNode
-	k_state_tb   *gui.Table
-	kalman_p_t2  *gui.Tree
-	k_pc_n       *gui.TreeNode
-	k_pc_tb      *gui.Table
-	k_oc_n       *gui.TreeNode
-	k_oc_tb      *gui.Table
-	k_tabs       *gui.TabBar
-	k_tabs_st_tb *gui.Tab
-	k_tabs_ci_tb *gui.Tab
+	kalman_tb_l *gui.Label
+	// kalman_p_s2 *gui.Splitter
+	// kalman_p_s  *gui.Splitter
+	kalman_p_t1 *gui.Tree
+
+	k_state_n  *gui.TreeNode
+	k_state_tb *gui.Table
+
+	// kalman_p_t2 *gui.Tree
+
+	k_pc_n  *gui.TreeNode
+	k_pc_tb *gui.Table
+
+	k_oc_n  *gui.TreeNode
+	k_oc_tb *gui.Table
+
+	k_K_n  *gui.TreeNode
+	k_K_tb *gui.Table
+
+	k_yh_n  *gui.TreeNode
+	k_yh_tb *gui.Table
+
+	// k_tabs       *gui.TabBar
+	// k_tabs_st_tb *gui.Tab
+	// k_tabs_ci_tb *gui.Tab
 
 	// Scene
 	camera *camera.Camera
@@ -105,8 +116,9 @@ type App struct {
 	t          time.Duration
 
 	// HAL Connector
-	con        *Connector
-	pos_offset math32.Vector3
+	con                *Connector
+	pos_offset         math32.Vector3
+	pos_offset_readout []float32
 }
 
 func Create() *App {
@@ -138,6 +150,7 @@ func Create() *App {
 
 	// Create frame rater
 	a.frameRater = util.NewFrameRater(targetFPS)
+	a.pos_offset_readout = make([]float32, 3)
 
 	// Build user interface
 	a.buildGUI()
@@ -184,7 +197,20 @@ func (a *App) onKey(evname string, ev interface{}) {
 	kev := ev.(*window.KeyEvent)
 	switch kev.Key {
 	case window.KeyF5:
-		a.pos_offset = *a.con.of_d.MultiplyScalar(-1)
+		a.pos_offset = *a.con.x_pos.MultiplyScalar(-1)
+		// a.pos_offset_readout[0] = a.con.x_pos.X / float32(a.con.posS)
+		// a.pos_offset_readout[1] = a.con.x_pos.Y / float32(a.con.posS)
+		// a.pos_offset_readout[2] = a.con.x_pos.Z / float32(a.con.posS)
+		// fmt.Printf("x_pos: %v\n", a.con.x_pos)
+		// fmt.Printf("Pos offset: %v\n", a.pos_offset.MultiplyScalar(-1/float32(a.con.posS)))
+		// panic("exit")
+		// pos -0.3 -1.2 -1.4
+		// offset -1.3 -1.4 -0.3
+		// pos_offset_scaled := a.pos_offset.MultiplyScalar(-1 / float32(a.con.posS))
+		a.pos_offset_readout[0] = -1 * a.con.x[0]
+		a.pos_offset_readout[1] = -1 * a.con.x[1]
+		a.pos_offset_readout[2] = -1 * a.con.x[2]
+
 		for i := range a.trail_s {
 			a.trail_s[i].SetPosition(0, 0, 0)
 		}
@@ -267,7 +293,7 @@ func (a *App) buildGUI() {
 	a.srm = gui.NewVScroller(float32(width)-float32(width)*0.3-10, float32(height)*0.2-a.srm_l.Height()-2)
 	a.mainPanel.SubscribeID(gui.OnResize, a, func(evname string, ev interface{}) {
 		width, height := a.GetSize()
-		a.srm.SetSize(float32(width)-float32(width)*0.3-10, float32(height)*0.2-a.srm_l.Height()-2)
+		a.srm.SetSize(float32(width)-float32(width)*0.35-10, float32(height)*0.2-a.srm_l.Height()-2)
 	})
 	a.srm.SetColor(&math32.Color{R: 0, G: 0, B: 0})
 	a.srm.SetPaddings(0, 5, 0, 5)
@@ -288,7 +314,7 @@ func (a *App) buildGUI() {
 	a.con.setUpdateGraphsFunc(a.updateGraphs, historySize, posScale)
 
 	// Graph & Table sidebar
-	a.sidebar = gui.NewPanel(float32(width)*0.3, float32(height))
+	a.sidebar = gui.NewPanel(float32(width)*0.35, float32(height))
 	a.sidebar.SetBorders(0, 0, 0, 1)
 	a.sidebar.SetPaddings(2, 2, 2, 2)
 	a.sidebar.SetColor4(&math32.Color4{R: 0.25, G: 0.25, B: 0.25, A: 1.0})
@@ -432,24 +458,28 @@ func (a *App) buildGUI() {
 
 	// Sidebar and First column
 	sidebar_r_height := a.mainPanel.Height() - a.kalman_tb_l.Position().Y
-	a.kalman_p_s = gui.NewHSplitter(a.sidebar.Width()-16, sidebar_r_height*0.6)
-	a.kalman_p_s.SetSplit(0.4)
-	a.kalman_p_s.P0.SetBorders(0, 1, 0, 0)
+	// a.kalman_p_s = gui.NewHSplitter(a.sidebar.Width()-16, sidebar_r_height*0.6)
+	// a.kalman_p_s.SetSplit(0.4)
+	// a.kalman_p_s.P0.SetBorders(0, 1, 0, 0)
 
-	a.kalman_p_s2 = gui.NewVSplitter(a.sidebar.Width()-16, sidebar_r_height)
-	a.kalman_p_s2.SetSplit(0.6)
-	a.sidebar.Add(a.kalman_p_s2)
-	a.kalman_p_s2.P0.Add(a.kalman_p_s)
+	// a.kalman_p_s2 = gui.NewVSplitter(a.sidebar.Width()-16, sidebar_r_height)
+	// a.kalman_p_s2.SetSplit(0.6)
+	// a.sidebar.Add(a.kalman_p_s2)
+	// a.kalman_p_s2.P0.Add(a.kalman_p_s)
 	// sidebar.Add(kalman_p_s)
 
 	// Kalman State
-	a.kalman_p_t1 = gui.NewTree(a.kalman_p_s.P0.ContentWidth(), sidebar_r_height*0.6)
-	a.kalman_p_s.P0.Add(a.kalman_p_t1)
+	// a.kalman_p_t1 = gui.NewTree(a.kalman_p_s.P0.ContentWidth(), sidebar_r_height*0.6)
+	a.kalman_p_t1 = gui.NewTree(a.sidebar.Width()-16, sidebar_r_height*1.0)
+	// a.kalman_p_s.P0.Add(a.kalman_p_t1)
+	a.sidebar.Add(a.kalman_p_t1)
+
 	a.k_state_n = a.kalman_p_t1.AddNode("State (x)")
 	var err error
-	a.k_state_tb, err = gui.NewTable(a.kalman_p_s.P0.ContentWidth(), 32*6, []gui.TableColumn{
-		{Id: "1", Header: "x", Width: 48, Minwidth: 32, Align: gui.AlignLeft, Format: "%3.3f", Expand: 0, Resize: false},
-		{Id: "2", Header: "param", Width: 48, Minwidth: 32, Align: gui.AlignLeft, Format: "%s", Expand: 1, Resize: false},
+	// a.k_state_tb, err = gui.NewTable(a.kalman_p_s.P0.ContentWidth(), 32*6, []gui.TableColumn{
+	a.k_state_tb, err = gui.NewTable(a.kalman_p_t1.ContentWidth(), 24*7, []gui.TableColumn{
+		{Id: "1", Header: "x", Width: 64, Minwidth: 48, Align: gui.AlignLeft, Format: "%3.3f", Expand: 0, Resize: false},
+		{Id: "2", Header: "param", Width: 64, Minwidth: 48, Align: gui.AlignLeft, Format: "%s", Expand: 1, Resize: false},
 	})
 	if err != nil {
 		panic(err)
@@ -467,7 +497,7 @@ func (a *App) buildGUI() {
 	state_vals := make([]map[string]interface{}, 0, 6)
 	for i := 0; i < 6; i++ {
 		rval := make(map[string]interface{})
-		rval["1"] = float32(i * 2)
+		rval["1"] = float32(-1.0)
 		rval["2"] = state_params[i]
 		state_vals = append(state_vals, rval)
 	}
@@ -475,26 +505,34 @@ func (a *App) buildGUI() {
 	a.k_state_n.Add(a.k_state_tb)
 	a.k_state_n.SetExpanded(true)
 
-	// Second Column
-	a.kalman_p_t2 = gui.NewTree(a.kalman_p_s.P1.ContentWidth(), sidebar_r_height*0.6)
-	a.kalman_p_s.P1.Add(a.kalman_p_t2)
+	// Second Row
+	/*
+		// a.kalman_p_t2 = gui.NewTree(a.kalman_p_s.P1.ContentWidth(), sidebar_r_height*0.6)
+		a.kalman_p_t2 = gui.NewTree(a.sidebar.Width()-16, sidebar_r_height*0.6)
+		// a.kalman_p_s.P0.Add(a.kalman_p_t2)
+		a.sidebar.Add(a.kalman_p_t2)
+	*/
 
 	// Kalman Proccess Covariance
-	a.k_pc_n = a.kalman_p_t2.AddNode("Proccess Covariance (Q)")
-	a.k_pc_tb, err = gui.NewTable(a.kalman_p_s.P1.ContentWidth(), 24*3, []gui.TableColumn{
-		{Id: "1", Width: 48, Minwidth: 32, Align: gui.AlignLeft, Format: "%3.3f", Expand: 0, Resize: false},
-		{Id: "2", Width: 48, Minwidth: 32, Align: gui.AlignLeft, Format: "%3.3f", Expand: 0, Resize: false},
-		{Id: "3", Width: 48, Minwidth: 32, Align: gui.AlignLeft, Format: "%3.3f", Expand: 0, Resize: false},
+	a.k_pc_n = a.kalman_p_t1.AddNode("State Error Covariance (P)")
+	// a.k_pc_tb, err = gui.NewTable(a.kalman_p_s.P1.ContentWidth(), 24*3, []gui.TableColumn{
+	a.k_pc_tb, err = gui.NewTable(a.kalman_p_t1.ContentWidth(), 24*7, []gui.TableColumn{
+		{Id: "1", Width: 64 + 8, Minwidth: 48, Align: gui.AlignLeft, Format: "%3.7f", Expand: 0, Resize: false},
+		{Id: "2", Width: 64 + 8, Minwidth: 48, Align: gui.AlignLeft, Format: "%3.7f", Expand: 0, Resize: false},
+		{Id: "3", Width: 64 + 8, Minwidth: 48, Align: gui.AlignLeft, Format: "%3.7f", Expand: 0, Resize: false},
+		{Id: "4", Width: 64 + 8, Minwidth: 48, Align: gui.AlignLeft, Format: "%3.7f", Expand: 0, Resize: false},
+		{Id: "5", Width: 64 + 8, Minwidth: 48, Align: gui.AlignLeft, Format: "%3.7f", Expand: 0, Resize: false},
+		{Id: "6", Width: 64 + 8, Minwidth: 48, Align: gui.AlignLeft, Format: "%3.7f", Expand: 0, Resize: false},
 	})
 	if err != nil {
 		panic(err)
 	}
-	k_pc_vals := make([]map[string]interface{}, 0, 3)
-	for i := 0; i < 3; i++ {
+	k_pc_vals := make([]map[string]interface{}, 0, 6)
+	for i := 0; i < 6; i++ {
 		rval := make(map[string]interface{})
-		rval["1"] = rand.Float32()
-		rval["2"] = rand.Float32()
-		rval["3"] = rand.Float32()
+		for j := 0; j < 6; j++ {
+			rval[fmt.Sprintf("%d", j+1)] = float32(-1.0)
+		}
 		k_pc_vals = append(k_pc_vals, rval)
 	}
 	a.k_pc_tb.SetRows(k_pc_vals)
@@ -502,22 +540,19 @@ func (a *App) buildGUI() {
 	a.k_pc_n.Add(a.k_pc_tb)
 	a.k_pc_n.SetExpanded(true)
 
-	// Kalman Observation Covariance
-	a.k_oc_n = a.kalman_p_t2.AddNode("Observation Covariance (R)")
-	a.k_oc_tb, err = gui.NewTable(a.kalman_p_s.P1.ContentWidth(), 24*3, []gui.TableColumn{
-		{Id: "1", Width: 48, Minwidth: 32, Align: gui.AlignLeft, Format: "%3.3f", Expand: 0, Resize: false},
-		{Id: "2", Width: 48, Minwidth: 32, Align: gui.AlignLeft, Format: "%3.3f", Expand: 0, Resize: false},
-		{Id: "3", Width: 48, Minwidth: 32, Align: gui.AlignLeft, Format: "%3.3f", Expand: 0, Resize: false},
+	// Kalman State Transisiton
+	a.k_oc_n = a.kalman_p_t1.AddNode("State Transition (f)")
+	// a.k_oc_tb, err = gui.NewTable(a.kalman_p_s.P1.ContentWidth(), 24*3, []gui.TableColumn{
+	a.k_oc_tb, err = gui.NewTable(a.kalman_p_t1.ContentWidth(), 24*7, []gui.TableColumn{
+		{Id: "1", Width: 64, Minwidth: 48, Align: gui.AlignLeft, Format: "%3.6f", Expand: 0, Resize: false},
 	})
 	if err != nil {
 		panic(err)
 	}
-	k_oc_vals := make([]map[string]interface{}, 0, 3)
-	for i := 0; i < 3; i++ {
+	k_oc_vals := make([]map[string]interface{}, 0, 6)
+	for i := 0; i < 6; i++ {
 		rval := make(map[string]interface{})
-		rval["1"] = rand.Float32()
-		rval["2"] = rand.Float32()
-		rval["3"] = rand.Float32()
+		rval["1"] = float32(-1.0)
 		k_oc_vals = append(k_oc_vals, rval)
 	}
 	a.k_oc_tb.SetRows(k_oc_vals)
@@ -525,22 +560,69 @@ func (a *App) buildGUI() {
 	a.k_oc_n.Add(a.k_oc_tb)
 	a.k_oc_n.SetExpanded(true)
 
-	// Bottom Row fixed matrices
-	a.k_tabs = gui.NewTabBar(a.kalman_p_s2.ContentWidth(), a.kalman_p_s2.P1.ContentHeight())
-	a.k_tabs.SetPaddings(0, 2, 0, 2)
-	a.k_tabs.SetMargins(0, 2, 0, 2)
-	a.kalman_p_s2.P1.Add(a.k_tabs)
-	a.mainPanel.SubscribeID(gui.OnResize, a, func(evname string, ev interface{}) {
-		a.k_tabs.SetSize(a.kalman_p_s2.ContentWidth(), a.kalman_p_s2.P1.ContentHeight())
+	// Kalman Kalman Gain
+	a.k_K_n = a.kalman_p_t1.AddNode("Kalman Gain (K)")
+	a.k_K_tb, err = gui.NewTable(a.kalman_p_t1.ContentWidth(), 24*4, []gui.TableColumn{
+		{Id: "1", Width: 64, Minwidth: 48, Align: gui.AlignLeft, Format: "%3.6f", Expand: 0, Resize: false},
+		{Id: "2", Width: 64, Minwidth: 48, Align: gui.AlignLeft, Format: "%3.6f", Expand: 0, Resize: false},
+		{Id: "3", Width: 64, Minwidth: 48, Align: gui.AlignLeft, Format: "%3.6f", Expand: 0, Resize: false},
+		{Id: "4", Width: 64, Minwidth: 48, Align: gui.AlignLeft, Format: "%3.6f", Expand: 0, Resize: false},
+		{Id: "5", Width: 64, Minwidth: 48, Align: gui.AlignLeft, Format: "%3.6f", Expand: 0, Resize: false},
+		{Id: "6", Width: 64, Minwidth: 48, Align: gui.AlignLeft, Format: "%3.6f", Expand: 0, Resize: false},
 	})
+	if err != nil {
+		panic(err)
+	}
+	k_K_vals := make([]map[string]interface{}, 0, 3)
+	for i := 0; i < 3; i++ {
+		rval := make(map[string]interface{})
+		for j := 0; j < 6; j++ {
+			rval[fmt.Sprintf("%d", j+1)] = float32(-1.0)
+		}
+		k_K_vals = append(k_K_vals, rval)
+	}
+	a.k_K_tb.SetRows(k_K_vals)
+	a.k_K_tb.ShowHeader(false)
+	a.k_K_n.Add(a.k_K_tb)
+	a.k_K_n.SetExpanded(true)
 
-	// State Transition Matrix (F)
-	a.k_tabs_st_tb = a.k_tabs.AddTab("State Transition Matrix (F)")
-	a.k_tabs_st_tb.SetPinned(true)
+	// Kalman Innovation
+	a.k_yh_n = a.kalman_p_t1.AddNode("Innovation (y-h)")
+	a.k_yh_tb, err = gui.NewTable(a.kalman_p_t1.ContentWidth(), 24*4, []gui.TableColumn{
+		{Id: "1", Width: 64, Minwidth: 48, Align: gui.AlignLeft, Format: "%3.6f", Expand: 0, Resize: false},
+	})
+	if err != nil {
+		panic(err)
+	}
+	k_yh_vals := make([]map[string]interface{}, 0, 3)
+	for i := 0; i < 3; i++ {
+		rval := make(map[string]interface{})
+		rval["1"] = float32(-1.0)
+		k_yh_vals = append(k_yh_vals, rval)
+	}
+	a.k_yh_tb.SetRows(k_yh_vals)
+	a.k_yh_tb.ShowHeader(false)
+	a.k_yh_n.Add(a.k_yh_tb)
+	a.k_yh_n.SetExpanded(true)
 
-	// Control Input Model (B)
-	a.k_tabs_ci_tb = a.k_tabs.AddTab("Control-Input Model (B)")
-	a.k_tabs_ci_tb.SetPinned(true)
+	/*
+		// Bottom Row fixed matrices
+		a.k_tabs = gui.NewTabBar(a.kalman_p_s2.ContentWidth(), a.kalman_p_s2.P1.ContentHeight())
+		a.k_tabs.SetPaddings(0, 2, 0, 2)
+		a.k_tabs.SetMargins(0, 2, 0, 2)
+		a.kalman_p_s2.P1.Add(a.k_tabs)
+		a.mainPanel.SubscribeID(gui.OnResize, a, func(evname string, ev interface{}) {
+			a.k_tabs.SetSize(a.kalman_p_s2.ContentWidth(), a.kalman_p_s2.P1.ContentHeight())
+		})
+
+		// State Transition Matrix (F)
+		a.k_tabs_st_tb = a.k_tabs.AddTab("State Transition Matrix (F)")
+		a.k_tabs_st_tb.SetPinned(true)
+
+		// Control Input Model (B)
+		a.k_tabs_ci_tb = a.k_tabs.AddTab("Control-Input Model (B)")
+		a.k_tabs_ci_tb.SetPinned(true)
+	*/
 
 	// FPS label
 	a.labelFPS = gui.NewLabel("FPS: 000.0")
@@ -646,11 +728,63 @@ func (a *App) updateGraphs() {
 		state_vals := make([]map[string]interface{}, 0, 6)
 		for i := 0; i < 6; i++ {
 			rval := make(map[string]interface{})
-			rval["1"] = a.con.x[i]
+			// rval["1"] = a.con.x[i]
+			// add in offset and set 1st column
+
+			if i < 3 {
+				rval["1"] = a.con.x[i] + a.pos_offset_readout[i]
+			} else {
+				rval["1"] = a.con.x[i]
+			}
+
 			rval["2"] = state_params[i]
 			state_vals = append(state_vals, rval)
+
 		}
+		// state_vals[0]["1"] = a.con.x[0] + a.pos_offset.X
+		// state_vals[1]["1"] = a.con.x[1] + a.pos_offset.Y
+		// state_vals[2]["1"] = a.con.x[2] + a.pos_offset.Z
 		a.k_state_tb.SetRows(state_vals)
+
+		// State Covariance Table
+		k_pc_vals := make([]map[string]interface{}, 0, 6)
+		for i := 0; i < 6; i++ {
+			rval := make(map[string]interface{})
+			for j := 0; j < 6; j++ {
+				rval[fmt.Sprintf("%d", j+1)] = a.con.P[i*6+j]
+			}
+			k_pc_vals = append(k_pc_vals, rval)
+		}
+		a.k_pc_tb.SetRows(k_pc_vals)
+
+		// State Transition Table
+		k_oc_vals := make([]map[string]interface{}, 0, 6)
+		for i := 0; i < 6; i++ {
+			rval := make(map[string]interface{})
+			rval["1"] = a.con.f[i]
+			k_oc_vals = append(k_oc_vals, rval)
+		}
+		a.k_oc_tb.SetRows(k_oc_vals)
+
+		// Kalman Gain Table
+		k_K_vals := make([]map[string]interface{}, 0, 3)
+		for i := 0; i < 3; i++ {
+			rval := make(map[string]interface{})
+			for j := 0; j < 6; j++ {
+				rval[fmt.Sprintf("%d", j+1)] = a.con.K[i*6+j]
+			}
+			k_K_vals = append(k_K_vals, rval)
+		}
+		a.k_K_tb.SetRows(k_K_vals)
+
+		// Innovation Table
+		k_yh_vals := make([]map[string]interface{}, 0, 3)
+		for i := 0; i < 3; i++ {
+			rval := make(map[string]interface{})
+			rval["1"] = a.con.yh[i]
+			k_yh_vals = append(k_yh_vals, rval)
+		}
+		a.k_yh_tb.SetRows(k_yh_vals)
 
 	}
 }
@@ -719,22 +853,26 @@ func (a *App) updateViz(deltaTime time.Duration) {
 		)
 	*/
 
+	// If we are connected to the device, update the 3D scene
 	if !a.con.rso {
-
-		currentPos := a.con.of_d.Add(&a.pos_offset)
-
+		// Get the current position, subtracting the zero point offset
+		currentPos := a.con.x_pos.Add(&a.pos_offset)
+		// Set the position and orientation of the device visual
 		a.vdisk.SetRotationQuat(&a.con.orin)
 		a.vdisk.SetPositionVec(currentPos)
 
 		// var x, z float32
 		// x, z = 0.0, 0.0
-		// Update the trail sprites
+		// Update the trail sprites, moving them back according to the history buffer
 		for i := len(a.trail_s) - 1; i > 0; i-- {
+			// Retrieve and set the position
 			pos := a.trail_s[i-1].Position()
 			a.trail_s[i].SetPositionVec(&pos)
+			// Retrieve and set the rotation
 			rot := a.trail_s[i-1].Rotation()
 			a.trail_s[i].SetRotationVec(&rot)
 
+			// Hide sprites older than the specified history size
 			if i <= a.histShow {
 				a.trail_s[i].SetVisible(true)
 			} else {
@@ -742,8 +880,35 @@ func (a *App) updateViz(deltaTime time.Duration) {
 			}
 		}
 		// a.trail_s[0].SetPosition(x, 0, z)
-		a.trail_s[0].SetPositionVec(currentPos)
 		// a.trail_s[0].RotateZ(0.01)
+
+		// Set the position and rotation of the current position trail sprite
+		a.trail_s[0].SetPositionVec(currentPos)
+		a.trail_s[0].SetRotationQuat(&a.con.orin)
+
+		// Update the tail sprite colours based on velocity
+		/*
+			for i := 0; i < len(a.trail_s)-1; i++ {
+				// Calculate velocity
+				currentPos := a.trail_s[i].Position()
+				nextPos := a.trail_s[i+1].Position()
+				delta := math32.Abs(currentPos.DistanceTo(&nextPos))
+				vel := delta / float32(1.0/100)
+				fmt.Printf("delta: %v, vel: %v\n", delta, vel)
+				// Set the colour based on velocity
+				maxVel := 10
+				velScale := vel / float32(maxVel)
+				if velScale > 1.0 {
+					velScale = 1.0
+				}
+				// fmt.Printf("velScale: %v\n", velScale)
+				r, g, b, _ := colorconv.HSLToRGB(float64(velScale), 1.0, 1.0)
+				// fmt.Printf("r: %v, g: %v, b: %v\n", r, g, b)
+
+				// a.trail_s[i].GetMaterial(0).Dispose()
+				a.trail_s[i].AddMaterial(a.trail_s[i], material.NewStandard(&math32.Color{R: float32(r / 255.0), G: float32(g / 255.0), B: float32(b / 255.0)}), 0, 0)
+			}
+		*/
 
 	}
 }

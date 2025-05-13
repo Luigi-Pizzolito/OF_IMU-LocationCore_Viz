@@ -33,24 +33,29 @@ type Connector struct {
 	rso bool
 
 	// Kalman State
-	x math32.ArrayF32
-	P math32.ArrayF32
+	x     math32.ArrayF32
+	x_pos math32.Vector3
+	P     math32.ArrayF32
+	f     math32.ArrayF32
+	K     math32.ArrayF32
+	yh    math32.ArrayF32
+
+	predict_cpu float32
+	update_cpu  float32
 
 	lin_accel math32.Vector3
 	orin      math32.Quaternion
 	orin_e    math32.Vector3
 	of_d      math32.Vector3
 
+	x_pos_a     []math32.Vector3
 	lin_accel_a []math32.Vector3
 	orin_e_a    []math32.Vector3
 	of_d_a      []math32.Vector3
 
-	historySize int
-	posS        int
-
+	historySize      int
+	posS             int
 	updateGraphsFunc func()
-
-	lin_accel_v math32.Vector3
 }
 
 var (
@@ -67,9 +72,13 @@ func (c *Connector) setUpdateGraphsFunc(f func(), hist int, pS int) {
 	c.lin_accel_a = make([]math32.Vector3, c.historySize)
 	c.orin_e_a = make([]math32.Vector3, c.historySize)
 	c.of_d_a = make([]math32.Vector3, c.historySize)
+	c.x_pos_a = make([]math32.Vector3, c.historySize)
 
 	c.x = make(math32.ArrayF32, 6)
 	c.P = make(math32.ArrayF32, 6*6)
+	c.f = make(math32.ArrayF32, 6)
+	c.K = make(math32.ArrayF32, 3*6)
+	c.yh = make(math32.ArrayF32, 3)
 
 	c.updateGraphsFunc = f
 }
@@ -250,6 +259,15 @@ func (c *Connector) portRecvCb(recv string) {
 					}
 					c.lin_accel.ApplyQuaternion(qRobotProjection)
 				}
+				if sensor_input["of"] != nil {
+					of := sensor_input["of"].(map[string]interface{})
+					c.of_d = math32.Vector3{
+						X: float32(of["x"].(float64)),
+						Y: float32(of["y"].(float64)),
+						Z: float32(of["z"].(float64)),
+					}
+					c.of_d.ApplyQuaternion(qRobotProjection)
+				}
 			}
 			if data["state"] != nil {
 				state := data["state"].(map[string]interface{})
@@ -261,14 +279,66 @@ func (c *Connector) portRecvCb(recv string) {
 				c.x[4] = float32(state["vy"].(float64))
 				c.x[5] = float32(state["vz"].(float64))
 
-				c.of_d = math32.Vector3{
+				c.x_pos = math32.Vector3{
 					X: float32(state["x"].(float64)),
 					Y: -float32(state["y"].(float64)),
 					Z: -float32(state["z"].(float64)),
 				}
-				c.of_d.ApplyQuaternion(qRobotProjection)
-				c.of_d.MultiplyScalar(float32(c.posS))
+				c.x_pos.ApplyQuaternion(qRobotProjection)
+				c.x_pos.MultiplyScalar(float32(c.posS))
+
+				if data["f"] != nil {
+					// We are in predict step
+					// if state["dt"] != nil {
+					dt := float32(state["dt"].(float64))
+					c.predict_cpu = dt / (1.0 / 50) // 50 Hz predict
+					// }
+				} else if data["y-h"] != nil {
+					// We are in update step
+					// if state["dt"] != nil {
+					dt := float32(state["dt"].(float64))
+					c.update_cpu = dt / (1.0 / 10) // 10 Hz update
+					// }
+				}
+
+				// //! temp for testing
+				// c.of_d = math32.Vector3{
+				// 	X: float32(state["x"].(float64)),
+				// 	Y: -float32(state["y"].(float64)),
+				// 	Z: -float32(state["z"].(float64)),
+				// }
+				// c.of_d.ApplyQuaternion(qRobotProjection)
+				// c.of_d.MultiplyScalar(float32(c.posS))
+
 				// c.of_d.ApplyQuaternion(&c.orin)
+			}
+
+			if data["P"] != nil {
+				for i := 0; i < 6*6; i++ {
+					c.P[i] = float32(data["P"].([]interface{})[i].(float64))
+				}
+				// fmt.Printf("P: %+v\n", c.P)
+			}
+
+			if data["f"] != nil {
+				for i := 0; i < 6; i++ {
+					c.f[i] = float32(data["f"].([]interface{})[i].(float64))
+				}
+				// fmt.Printf("f: %+v\n", c.f)
+			}
+
+			if data["K"] != nil {
+				for i := 0; i < 3*6; i++ {
+					c.K[i] = float32(data["K"].([]interface{})[i].(float64))
+				}
+				// fmt.Printf("K: %+v\n", c.K)
+			}
+
+			if data["y-h"] != nil {
+				for i := 0; i < 3; i++ {
+					c.yh[i] = float32(data["y-h"].([]interface{})[i].(float64))
+				}
+				// fmt.Printf("yh: %+v\n", c.yh)
 			}
 
 			// Ensure history buffers are initialized
@@ -280,6 +350,9 @@ func (c *Connector) portRecvCb(recv string) {
 			}
 			if len(c.of_d_a) == 0 {
 				c.of_d_a = make([]math32.Vector3, c.historySize)
+			}
+			if len(c.x_pos_a) == 0 {
+				c.x_pos_a = make([]math32.Vector3, c.historySize)
 			}
 
 			// Shift history buffers back by one
@@ -297,6 +370,11 @@ func (c *Connector) portRecvCb(recv string) {
 				c.of_d_a[i] = c.of_d_a[i-1]
 			}
 			c.of_d_a[0] = c.of_d
+
+			for i := len(c.x_pos_a) - 1; i > 0; i-- {
+				c.x_pos_a[i] = c.x_pos_a[i-1]
+			}
+			c.x_pos_a[0] = c.x_pos
 
 			// fmt.Printf("Optical Flow Delta: %+v\n", c.of_d)
 			// fmt.Printf("Orientation Quaternion: %+v\n", c.orin)
