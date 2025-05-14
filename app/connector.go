@@ -2,8 +2,11 @@ package app
 
 import (
 	"bufio"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"math"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -56,6 +59,9 @@ type Connector struct {
 	historySize      int
 	posS             int
 	updateGraphsFunc func()
+
+	logFile   *os.File
+	logWriter *csv.Writer
 }
 
 var (
@@ -132,6 +138,213 @@ func (c *Connector) ConnectPort(portname string) {
 
 }
 
+func (c *Connector) StartNewLog() {
+	if c.logFile != nil {
+		c.logFile.Close()
+	}
+	if c.logWriter != nil {
+		c.logWriter.Flush()
+		c.logWriter = nil
+	}
+	// Generate log filename as log_DDMMYY_HHMMSS.csv in folder log
+	t := time.Now()
+	logFileName := fmt.Sprintf("log_%02d%02d%02d_%02d%02d%02d.csv", t.Day(), t.Month(), t.Year()%100, t.Hour(), t.Minute(), t.Second())
+	if _, err := os.Stat("log"); os.IsNotExist(err) {
+		os.Mkdir("log", os.ModePerm)
+	}
+	logFileName = "log/" + logFileName
+	fmt.Println("Log file: " + logFileName)
+	// Clear all files in log folder
+	files, err := os.ReadDir("log")
+	if err != nil {
+		panic("Error reading log folder: " + err.Error())
+	}
+	for _, file := range files {
+		if file.Name() != logFileName {
+			err := os.Remove("log/" + file.Name())
+			if err != nil {
+				panic("Error removing file: " + file.Name() + " with error: " + err.Error())
+			}
+		}
+	}
+	// Create log file
+	c.logFile, err = os.Create(logFileName)
+	if err != nil {
+		panic("Error opening file: " + logFileName + " with error: " + err.Error())
+	}
+
+	// Create writer
+	c.logWriter = csv.NewWriter(c.logFile)
+
+	// write header
+	c.WriteHeader()
+}
+
+func (c *Connector) WriteHeader() {
+	// Prepare header
+	header := []string{
+		"t",
+		"predict_cpu",
+		"update_cpu",
+		"quat_x",
+		"quat_y",
+		"quat_z",
+		"quat_w",
+		"accel_x",
+		"accel_y",
+		"accel_z",
+		"of_x",
+		"of_y",
+		"of_z",
+		"x_x",
+		"x_y",
+		"x_z",
+		"x_vx",
+		"x_vy",
+		"x_vz",
+		"dt"}
+	for i := range 6 * 6 {
+		header = append(header, fmt.Sprintf("P_%d", i))
+	}
+	// Write header
+	if err := c.logWriter.Write(header); err != nil {
+		panic("Error writing header to log file: " + err.Error())
+	}
+	// Flush immediately
+	c.logWriter.Flush()
+	if err := c.logFile.Sync(); err != nil {
+		panic("Error syncing logfile: " + err.Error())
+	}
+}
+
+func (c *Connector) WriteLog(data map[string]interface{}) {
+	// Write header
+	if c.logWriter == nil {
+		// c.StartNewLog()
+		return
+	}
+
+	// Extract data
+	var micros float64
+	var quat_x, quat_y, quat_z, quat_w, accel_x, accel_y, accel_z, of_x, of_y, of_z float32
+	var x_x, x_y, x_z, x_vx, x_vy, x_vz, dt float32
+	var predict_cpu, update_cpu float32
+	P := make([]float32, 6*6)
+	if data["sensor_input"] != nil {
+		sensor_input := data["sensor_input"].(map[string]interface{})
+		if sensor_input["quat"] != nil {
+			quat := sensor_input["quat"].(map[string]interface{})
+			quat_x = float32(quat["x"].(float64))
+			quat_y = float32(quat["y"].(float64))
+			quat_z = float32(quat["z"].(float64))
+			quat_w = float32(quat["w"].(float64))
+		}
+		if sensor_input["accel"] != nil {
+			accel := sensor_input["accel"].(map[string]interface{})
+			accel_x = float32(accel["x"].(float64))
+			accel_y = float32(accel["y"].(float64))
+			accel_z = float32(accel["z"].(float64))
+		} else {
+			accel_x = -math.MaxFloat32
+			accel_y = -math.MaxFloat32
+			accel_z = -math.MaxFloat32
+		}
+		if sensor_input["of"] != nil {
+			of := sensor_input["of"].(map[string]interface{})
+			of_x = float32(of["x"].(float64))
+			of_y = float32(of["y"].(float64))
+			of_z = float32(of["z"].(float64))
+		} else {
+			of_x = -math.MaxFloat32
+			of_y = -math.MaxFloat32
+			of_z = -math.MaxFloat32
+		}
+	}
+	if data["state"] != nil {
+		state := data["state"].(map[string]interface{})
+		x_x = float32(state["x"].(float64))
+		x_y = float32(state["y"].(float64))
+		x_z = float32(state["z"].(float64))
+		x_vx = float32(state["vx"].(float64))
+		x_vy = float32(state["vy"].(float64))
+		x_vz = float32(state["vz"].(float64))
+		dt = float32(state["dt"].(float64))
+		micros = data["micros"].(float64) / 1e6
+
+		if data["f"] != nil {
+			// We are in predict step
+			predict_cpu = dt / (1.0 / 50) // 50 Hz predict
+			// }
+		} else if data["y-h"] != nil {
+			// We are in update step
+			update_cpu = dt / (1.0 / 10) // 10 Hz update
+		}
+	}
+	if data["P"] != nil {
+		for i := 0; i < 6*6; i++ {
+			P[i] = float32(data["P"].([]interface{})[i].(float64))
+		}
+	} else {
+		for i := 0; i < 6*6; i++ {
+			P[i] = -math.MaxFloat32
+		}
+	}
+
+	// Write data
+	var row []string
+	row = append(row, fmt.Sprintf("%3.7f", micros))
+	if data["f"] != nil {
+		row = append(row, fmt.Sprintf("%3.7f", predict_cpu), "")
+	} else {
+		row = append(row, "", fmt.Sprintf("%3.7f", update_cpu))
+	}
+	row = append(row,
+		fmt.Sprintf("%3.7f", quat_x),
+		fmt.Sprintf("%3.7f", quat_y),
+		fmt.Sprintf("%3.7f", quat_z),
+		fmt.Sprintf("%3.7f", quat_w))
+	if accel_x != -math.MaxFloat32 {
+		row = append(row,
+			fmt.Sprintf("%3.7f", accel_x),
+			fmt.Sprintf("%3.7f", accel_y),
+			fmt.Sprintf("%3.7f", accel_z))
+	} else {
+		row = append(row, "", "", "")
+	}
+	if of_x != -math.MaxFloat32 {
+		row = append(row,
+			fmt.Sprintf("%3.7f", of_x),
+			fmt.Sprintf("%3.7f", of_y),
+			fmt.Sprintf("%3.7f", of_z))
+	} else {
+		row = append(row, "", "", "")
+	}
+	row = append(row,
+		fmt.Sprintf("%3.7f", x_x),
+		fmt.Sprintf("%3.7f", x_y),
+		fmt.Sprintf("%3.7f", x_z),
+		fmt.Sprintf("%3.7f", x_vx),
+		fmt.Sprintf("%3.7f", x_vy),
+		fmt.Sprintf("%3.7f", x_vz),
+		fmt.Sprintf("%3.7f", dt))
+	for i := range 6 * 6 {
+		if P[i] != -math.MaxFloat32 {
+			row = append(row, fmt.Sprintf("%3.7f", P[i]))
+		} else {
+			row = append(row, "")
+		}
+	}
+
+	if err := c.logWriter.Write(row); err != nil {
+		fmt.Println("Error writing to log file:", err)
+	}
+	// Flush immediately
+	c.logWriter.Flush()
+	if err := c.logFile.Sync(); err != nil {
+		panic("Error syncing logfile: " + err.Error())
+	}
+}
+
 var (
 	start = time.Now()
 	count = 0
@@ -171,7 +384,7 @@ func (c *Connector) portRecvCb(recv string) {
 		c.srm.ScrollDown()
 	*/
 
-	fmt.Println("Received: " + recv)
+	// fmt.Println("Received: " + recv)
 
 	var data map[string]interface{}
 	if err := json.Unmarshal([]byte(recv), &data); err != nil {
@@ -179,6 +392,9 @@ func (c *Connector) portRecvCb(recv string) {
 		return
 	} else {
 		// fmt.Println("Parsed JSON Data:", data)
+
+		// todo: add logging routine
+		go c.WriteLog(data)
 
 		go func() {
 			// wait for flag to release
@@ -300,6 +516,7 @@ func (c *Connector) portRecvCb(recv string) {
 					c.update_cpu = dt / (1.0 / 10) // 10 Hz update
 					// }
 				}
+				fmt.Printf("predict_cpu: %.2f, update_cpu: %.2f\n", c.predict_cpu, c.update_cpu)
 
 				// //! temp for testing
 				// c.of_d = math32.Vector3{

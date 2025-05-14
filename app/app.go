@@ -214,6 +214,10 @@ func (a *App) onKey(evname string, ev interface{}) {
 		for i := range a.trail_s {
 			a.trail_s[i].SetPosition(0, 0, 0)
 		}
+
+		// Restart log
+		a.con.StartNewLog()
+		// a.con.WriteHeader()
 	}
 }
 
